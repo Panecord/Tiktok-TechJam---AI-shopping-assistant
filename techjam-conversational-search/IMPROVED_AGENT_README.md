@@ -73,9 +73,8 @@
 - **Minor version** (e.g. `1.1 -> 1.2`, `2.1 -> 2.2`) = an iterative improvement or bug fix.
 
 | Version | Notes | Key metric change |
-| `v2.7.0` | **Slot-vocabulary expansion + performance.** (a) `CATEGORY_TOKENS` extended with plural forms and data-driven additions from the public-set audit (tees, bras, socks, jeans, slippers, loafers, …). (b) `MATERIALS` extended with jewelry/accessory materials, plus explicit `"Label: value"` constraint parsing. (c) Perf: cached lowercased searchable text (`_searchable_lc`) and a posting-list inverted index for dense scoring (~4x faster per turn). (d) Null-price budget behavior made an explicit, documented deterministic choice. | HR@10 `0.575 -> 0.630`, MRR `0.4310 -> 0.4556`, MTTC `8.20 -> 7.555`, score `0.4728 -> 0.5206` |
-
-> The next improvement will be `v2.8s BM25 starter (the provided baseline). | Hit Rate@10 `0.125`, MRR `0.068034`, score `0.10671` |
+|---------|-------|-------------------|
+| `v1.0.0` | Original weak, stateless BM25 starter (the provided baseline). | Hit Rate@10 `0.125`, MRR `0.068034`, score `0.10671` |
 | `v2.0.0` | First upgrade: hybrid retrieval (BM25 + dense), dialogue state tracking, grounded rerank, ask-vs-recommend policy, turn-budget guard. | Hit Rate@10 `0.125 -> 0.225`, MRR `0.068034 -> 0.068581`, score `0.10671 -> 0.167074` |
 | `v2.1.0` | Fixed the buying regression and closed the MRR gap. The grounded rerank is now **relevance-dominated** with a slot-aware boost (instead of re-ranking by slot-match alone); the intent-override detector now triggers only on **strong pivot language**, so benign "I don't have a preference for X" replies no longer wipe the dialogue state. | Hit Rate@10 `0.225 -> 0.515`, MRR `0.068581 -> 0.349196`, buying HR `0.225 -> 0.5`, score `0.167074 -> 0.418059` |
 | `v2.2.0` | Added a grounded **LLM listwise reranker** (enabled via env vars, off by default). The pool is trimmed to `LLM_TOP = 25` upstream, a single zero-shot listwise call reorders it, and ids are validated against the candidate pool (retry once, then deterministic fallback). Real token usage is reported. Not A/B-validated here (needs self-managed credentials); default metrics are unchanged while disabled. | No change in default (deterministic) mode |
@@ -84,8 +83,9 @@
 | `v2.5.0` | **LLM reranker cost/latency fix.** `_rerank` now takes a `use_llm` flag: the LLM listwise call runs only on the **recommend branch**, not every clarifying turn. `_rerank_llm` retries only on a **grounding violation** and falls back to deterministic immediately on a transport/HTTP error or timeout (no retry stacking under rate limiting). Per-call HTTP timeout raised 20s -> 30s (observed latency 4-6s, can spike). LLM calls cut from ~12/session to ~1.3/session. | No change in default (deterministic) mode; full-set LLM validation now bounded (~1.3 LLM calls/session) |
 | `v2.6.0` | **Per-slot pivot handling + diagnostics.** (a) A pivot now clears only the slot(s) the new message targets (full reset only via "forget all that"). (b) `_retrieve()` exposes the fused pool for a **pool-recall** diagnostic. (c) Session-level 5-fold CV for the learned fusion. (d) Clarifying-question quality diagnostic (entropy vs random). | Full-set **pool recall `0.960` vs HR@10 `0.545`** -> bottleneck is ranking, not retrieval. Full-set: HR@10 `0.545`, MRR `0.422623`, MTTC `8.255`, score `0.454187`. Intent-override HR `0.5333` (no regression). |
 | `v2.6.1` | Dense retrieval now folds the accumulated slot values into its query (via `_dense_query`, token-de-duplicated) instead of scoring the raw message only — the dominant learned-fusion (dense) signal was previously blind to earlier-turn constraints. | HR@10 `0.545 -> 0.575`, MRR `0.4226 -> 0.4310`, MTTC `8.255 -> 8.20`, score `0.4542 -> 0.4728` |
+| `v2.7.0` | **Slot-vocabulary expansion + performance.** (a) `CATEGORY_TOKENS` extended with plural forms and data-driven additions from the public-set audit (tees, bras, socks, jeans, slippers, loafers, …). (b) `MATERIALS` extended with jewelry/accessory materials, plus explicit `"Label: value"` constraint parsing. (c) Perf: cached lowercased searchable text (`_searchable_lc`) and a posting-list inverted index for dense scoring (~4x faster per turn). (d) Null-price budget behavior made an explicit, documented deterministic choice. | HR@10 `0.575 -> 0.630`, MRR `0.4310 -> 0.4556`, MTTC `8.20 -> 7.555`, score `0.4728 -> 0.5206` |
 
-> The next improvement will be `v2.7.0`.
+> The next improvement will be `v2.8.0`.
 
 ## 1. Summary of What Changed
 
@@ -128,7 +128,8 @@ user turn
 
 Measured on the **200-session public dev set** via `python -m evaluator.local_evaluator`
 (the evaluator and public labels are untouched).
- Upgraded (v2.7.0) |
+
+| Metric | Baseline (BM25) | Upgraded (v2.0.0) | Upgraded (v2.1.0) | Upgraded (v2.6.0) | Upgraded (v2.7.0) |
 |--------|-----------------|-------------------|-------------------|-------------------|-------------------|
 | Hit Rate@10 | `0.125` | `0.225` | `0.515` | `0.545` | **`0.630`** |
 | MRR | `0.068034` | `0.068581` | `0.349196` | `0.422623` | **`0.455567`** |
@@ -143,8 +144,7 @@ Scenario breakdown (from `results.json`):
 | buying | `0.2375` | `0.225` | `0.5` | `0.5` | `0.6375` |
 | browsing | `0.025` | `0.2625` | `0.525` | `0.5625` | `0.6125` |
 | intent_override | `0.1333` | `0.1667` | `0.4667` | `0.5333` | `0.6` |
-| boundary | `0.0` | `0.1` | `0.7` | `0.8.1667` | `0.4667` | `0.5333` |
-| boundary | `0.0` | `0.1` | `0.7` | `0.8` |
+| boundary | `0.0` | `0.1` | `0.7` | `0.8` | `0.8` |
 
 The largest gains come from the **browsing** and **intent_override** scenarios, which were
 near-zero for the baseline because it never asked questions and never handled pivots.
@@ -350,7 +350,9 @@ python -m evaluator.local_evaluator
 ## 9. Limitations / Known Behaviours
 
 - Category detection relies on a fixed token list; rare category phrasing may not be captured.
-- Budget matching only applies when a product has a non-null `price`.
+- Budget matching deliberately gives no budget credit to null-price products (treated as
+  out-of-budget); ~79% of the catalog has no price, so only verifiably in-budget products
+  earn the budget signal.
 - The deterministic reranker uses lexical attribute matching, so subtle synonyms may be missed.
 - `usage` is `0` unless an LLM is configured; enabling the LLM requires a compatible
   chat-completion endpoint and does not improve the core metric unless it reorders candidates
