@@ -114,6 +114,13 @@ def _parse_money(value: object) -> float | None:
 MATERIALS = (
     "cotton", "polyester", "nylon", "leather", "wool", "spandex",
     "silk", "rayon", "fabric", "denim", "linen", "fleece", "lace",
+    # Updated with AI: jewelry-specific materials (catalog is Clothing_Shoes_and_Jewelry,
+    # the original list was clothing-fabric-only and missed this whole category).
+    "alloy", "gold", "silver", "sterling silver", "platinum", "titanium",
+    "stainless steel", "gemstone", "crystal", "rhinestone", "pearl",
+    "diamond", "cubic zirconia", "brass", "copper", "resin", "ceramic",
+    "plastic", "acrylic", "wood", "rubber", "suede",
+    "canvas", "mesh", "velvet", "satin", "chiffon", "polyurethane",
 )
 COLORS = (
     "black", "white", "blue", "red", "pink", "green", "brown", "gray", "grey",
@@ -151,6 +158,29 @@ COLOR_RE = re.compile(r"\b(" + "|".join(COLORS) + r")\b", re.I)
 SIZE_RE = re.compile(r"\b(" + "|".join(SIZES) + r")\b", re.I)
 STYLE_RE = re.compile(r"\b(" + "|".join(STYLES) + r")\b", re.I)
 USE_CASE_RE = re.compile(r"\b(" + "|".join(USE_CASES) + r")\b", re.I)
+
+# Updated with AI: the simulator frequently discloses a constraint verbatim as a
+# "Label: value" fragment lifted directly from the product's own feature/detail
+# fields (e.g. "Material:alloy", "Color: Rose Gold"). Fixed vocabulary lists can
+# never keep up with the raw catalog text, so we also parse this format directly
+# and map common label spellings onto our internal slot names.
+LABELED_ATTR_RE = re.compile(
+    r"\b(material|colou?r|size|style|category|department|use\s*case|occasion)\s*:\s*"
+    r"([a-z0-9][a-z0-9 \-]{0,40}?)(?:[;,.]|$)",
+    re.I,
+)
+LABEL_TO_SLOT = {
+    "material": "material",
+    "color": "color",
+    "colour": "color",
+    "size": "size",
+    "style": "style",
+    "department": "style",
+    "use case": "use_case",
+    "usecase": "use_case",
+    "occasion": "use_case",
+    "category": "category",
+}
 
 # The fixed allowed `ask_attribute` enum (from docs/agent_api_contract.json).
 ALLOWED_ASK_ATTRIBUTES = {
@@ -275,6 +305,15 @@ def _extract_slots(message: str) -> dict[str, Any]:
     text = message.lower()
     slots: dict[str, Any] = {}
 
+    # Updated with AI: parse explicit "Label: value" fragments first (these are
+    # ground-truth constraints handed to us verbatim by the customer/simulator,
+    # so they take priority over fuzzy vocabulary matching below).
+    for label, raw_value in LABELED_ATTR_RE.findall(text):
+        slot_name = LABEL_TO_SLOT.get(label.strip().lower())
+        value = raw_value.strip()
+        if slot_name and value:
+            slots[slot_name] = value
+
     # Category: capture the phrase after "looking for" / "for a" / "want a".
     for marker in ("looking for", "searching for", "need a", "want a", "for a"):
         idx = text.find(marker)
@@ -289,6 +328,8 @@ def _extract_slots(message: str) -> dict[str, Any]:
                 break
 
     for attr in ("material", "color", "size", "style", "use_case"):
+        if attr in slots:
+            continue  # Updated with AI: don't overwrite an exact labeled-value match above.
         value = _attr_value_from_text(text, attr)
         if value and value not in ("size",):
             slots[attr] = value
