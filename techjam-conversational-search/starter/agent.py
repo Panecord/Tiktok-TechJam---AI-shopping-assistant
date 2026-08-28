@@ -142,11 +142,27 @@ USE_CASES = (
     "everyday", "sport",
 )
 CATEGORY_TOKENS = (
+    # Original starter vocabulary (mostly singular).
     "shirt", "dress", "pants", "shoes", "boots", "jacket", "earrings",
     "necklace", "ring", "bracelet", "bag", "hat", "sweater", "hoodie",
     "skirt", "sandal", "sneaker", "watch", "sunglasses", "top", "blouse",
     "coat", "scarf", "belt", "heels", "flats", "leggings", "shorts",
     "jewelry", "jewellery", "tote", "clutch", "wallet", "gown",
+    # Plural forms — the Amazon category paths in the public set are overwhelmingly plural.
+    "shirts", "dresses", "jackets", "necklaces", "rings", "bracelets",
+    "bags", "hats", "sweaters", "hoodies", "skirts", "sandals",
+    "sneakers", "watches", "tops", "blouses", "coats", "scarves",
+    "belts", "totes", "clutches", "wallets", "gowns",
+    # Data-driven additions found in public-set category phrases (see _diag audit).
+    "tees", "t-shirts", "bras", "bra", "socks", "sock", "slippers",
+    "slipper", "panties", "tunics", "tunic", "underwear", "briefs",
+    "caps", "cap", "jeans", "handbags", "handbag", "loafers", "loafer",
+    "bikinis", "bikini", "bodysuits", "bodysuit", "undershirts",
+    "undershirt", "mules", "mule", "clogs", "clog", "rompers",
+    "romper", "hosiery", "sweatshirts", "sweatshirt", "vests", "vest",
+    "tanks", "tank", "overalls", "nightgowns", "nightgown",
+    "sleepshirts", "sweatpants", "scrubs", "anoraks", "anorak",
+    "raincoats", "raincoat", "crossbody",
 )
 BUDGET_RE = re.compile(
     r"(?:\$\s*(\d+(?:\.\d+)?)|(?:under|less than|<=|below)\s*\$?\s*(\d+(?:\.\d+)?)"
@@ -346,10 +362,11 @@ def _extract_slots(message: str) -> dict[str, Any]:
     return slots
 
 
-def _attribute_values_for_product(product: dict) -> dict[str, str]:
+def _attribute_values_for_product(product: dict, text: str | None = None) -> dict[str, str]:
     """Return the attribute values present in a product's text (for pool analysis)."""
     # Updated with AI
-    text = _searchable_text(product).lower()
+    if text is None:
+        text = _searchable_text(product).lower()
     values: dict[str, str] = {}
     for attr in ("material", "color", "size", "style", "use_case"):
         val = _attr_value_from_text(text, attr)
@@ -383,6 +400,9 @@ class Agent:
         # Fused relevance scores from the most recent retrieval (used by the reranker).
         self._last_fused: dict[str, float] = {}
         self._last_max_fused = 1.0
+        # Precomputed lowercased searchable text per ASIN (avoids re-joining + re-lowercasing
+        # every product's fields on every candidate scoring call — the per-turn hot path).
+        self._searchable_lc: dict[str, str] = {}
         self._build_catalog()
         self._build_bm25_index()
         self._build_dense_index()
@@ -468,7 +488,11 @@ class Agent:
         """Embed every catalog product once and store the normalized matrix."""
         # Updated with AI
         import numpy as np  # type: ignore[import-not-found]
-        texts = [_searchable_text(self.products[asin]) for asin in self.order]
+        texts: list[str] = []
+        for asin in self.order:
+            text = _searchable_text(self.products[asin])
+            self._searchable_lc[asin] = text.lower()
+            texts.append(text)
         emb = self._embed_model.encode(
             texts, batch_size=64, normalize_embeddings=True, show_progress_bar=False
         )
@@ -481,7 +505,9 @@ class Agent:
         doc_freqs: list[Counter] = []
         df: Counter = Counter()
         for asin in self.order:
-            counter = Counter(_terms(_searchable_text(self.products[asin])))
+            text_lc = _searchable_text(self.products[asin]).lower()
+            self._searchable_lc[asin] = text_lc
+            counter = Counter(_terms(text_lc))
             doc_freqs.append(counter)
             df.update(counter.keys())
 
@@ -601,12 +627,15 @@ class Agent:
         return " ".join(tokens)
 
     # -- Slot-aware re-scoring ------------------------------------------------
-    def _slot_match_score(self, product: dict, slots: dict[str, Any]) -> float:
+    def _slot_match_score(self, asin: str, slots: dict[str, Any]) -> float:
         """Score how well a product satisfies known slot constraints (0..1)."""
         # Updated with AI
         if not slots:
             return 0.0
-        text = _searchable_text(product).lower()
+        product = self.products.get(asin, {})
+        text = getattr(self, "_searchable_lc", {}).get(asin)
+        if text is None:
+            text = _searchable_text(product).lower()
         matched = 0.0
         total = 0.0
         for attr in ("material", "color", "size", "style", "use_case"):
@@ -649,7 +678,7 @@ class Agent:
         return [
             float(bm25),
             float(dense),
-            self._slot_match_score(product, slots),
+            self._slot_match_score(asin, slots),
             self._price_similarity(product, slots),
         ]
 
@@ -731,7 +760,7 @@ class Agent:
             if feat is not None:
                 return self._linear_fusion(feat)
         rel = self._last_fused.get(asin, 0.0) / self._last_max_fused
-        slot = self._slot_match_score(self.products.get(asin, {}), slots)
+        slot = self._slot_match_score(asin, slots)
         return rel + SLOT_BOOST_WEIGHT * slot
 
     def _top_scores(self, candidate_list: list[str], slots: dict[str, Any]) -> list[float]:
@@ -749,6 +778,8 @@ class Agent:
         per_attr_values: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
         for asin in candidate_list[:200]:
             product = self.products.get(asin, {})
+                product, getattr(self, "_searchable_lc", {}).get(asin)
+            
             values = _attribute_values_for_product(product)
             for attr, value in values.items():
                 if value:
