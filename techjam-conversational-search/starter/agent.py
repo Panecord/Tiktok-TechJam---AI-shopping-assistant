@@ -488,6 +488,7 @@ class Agent:
         """Embed every catalog product once and store the normalized matrix."""
         # Updated with AI
         import numpy as np  # type: ignore[import-not-found]
+        self._searchable_lc = {}
         texts: list[str] = []
         for asin in self.order:
             text = _searchable_text(self.products[asin])
@@ -501,6 +502,7 @@ class Agent:
     def _build_tfidf_index(self) -> None:
         """Build the in-memory sparse TF-IDF index (fallback path)."""
         # Updated with AI
+        self._searchable_lc = {}
         n_docs = len(self.order)
         doc_freqs: list[Counter] = []
         df: Counter = Counter()
@@ -538,6 +540,14 @@ class Agent:
             self._doc_counts.append(counts)
             self._doc_norms.append(math.sqrt(norm_sq) or 1.0)
 
+        # Inverted index (posting lists): term_idx -> [(doc_idx, tf*idf weight)].
+        # Lets dense scoring iterate only the docs that share a term with the query
+        # instead of scanning all ~50k docs per turn (the dominant per-turn cost).
+        self._postings: dict[int, list[tuple[int, float]]] = defaultdict(list)
+        for doc_idx, counts in enumerate(self._doc_counts):
+            for term_idx, count in counts.items():
+                self._postings[term_idx].append((doc_idx, count * self._idf[term_idx]))
+
     def _dense_scores(self, query: str) -> list[tuple[int, float]]:
         """Cosine similarity of the query against every catalog doc.
 
@@ -562,7 +572,12 @@ class Agent:
         return results
 
     def _tfidf_dense_scores(self, query: str) -> list[tuple[int, float]]:
-        """Original TF-IDF cosine scoring (fallback path)."""
+        """TF-IDF cosine scoring via posting lists (fast fallback path).
+
+        Mathematically identical to a per-document scan, but iterates only the
+        documents that actually share a term with the query (posting lists) rather
+        than all ~50k docs each turn.
+        """
         # Updated with AI
         q_counts = Counter(_terms(query))
         q_vec: dict[int, float] = {}
@@ -578,16 +593,27 @@ class Agent:
         if q_norm == 0.0:
             return []
 
-        results: list[tuple[int, float]] = []
-        for doc_idx, counts in enumerate(self._doc_counts):
-            dot = 0.0
+        acc: dict[int, float] = {}
+        postings = getattr(self, "_postings", None)
+        if postings is not None:
             for idx, qw in q_vec.items():
-                count = counts.get(idx)
-                if count:
-                    dot += qw * count * self._idf[idx]
-            if dot > 0.0:
-                sim = dot / (q_norm * self._doc_norms[doc_idx])
-                results.append((doc_idx, sim))
+                for doc_idx, dw in postings.get(idx, ()):
+                    acc[doc_idx] = acc.get(doc_idx, 0.0) + qw * dw
+        else:
+            # Fallback for callers without posting lists: scan all docs.
+            for doc_idx, counts in enumerate(self._doc_counts):
+                dot = 0.0
+                for idx, qw in q_vec.items():
+                    count = counts.get(idx)
+                    if count:
+                        dot += qw * count * self._idf[idx]
+                if dot > 0.0:
+                    acc[doc_idx] = dot
+
+        results: list[tuple[int, float]] = []
+        for doc_idx, dot in acc.items():
+            sim = dot / (q_norm * self._doc_norms[doc_idx])
+            results.append((doc_idx, sim))
         results.sort(key=lambda item: (-item[1], item[0]))
         return results
 
@@ -650,6 +676,10 @@ class Agent:
             total += 1.0
             if any(token in text for token in _terms(str(category))):
                 matched += 1.0
+        # Budget: null-price products get no credit (treated as out-of-budget). This is
+        # deliberate — ~79% of the catalog has no price and the ground-truth target is
+        # almost always priced, so only products with a verifiably in-budget price earn
+        # the budget signal (null-price stays eligible via every other signal).
         budget = slots.get("budget")
         if budget:
             total += 1.0
@@ -778,9 +808,9 @@ class Agent:
         per_attr_values: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
         for asin in candidate_list[:200]:
             product = self.products.get(asin, {})
+            values = _attribute_values_for_product(
                 product, getattr(self, "_searchable_lc", {}).get(asin)
-            
-            values = _attribute_values_for_product(product)
+            )
             for attr, value in values.items():
                 if value:
                     per_attr_values[attr][value] += 1

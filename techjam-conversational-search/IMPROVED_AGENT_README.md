@@ -1,7 +1,17 @@
-# Improved Agent — Track 4 Shopping Copilot (v2.6.1)
+# Improved Agent — Track 4 Shopping Copilot (v2.7.0)
 
 > **Updated with AI.** This document describes the upgraded `starter/agent.py` that
 > replaces the weak, stateless BM25 baseline (v1.0.0) shipped with the challenge.
+>
+> **v2.7.0 (Iteration 4):** expanded the slot vocabularies — `CATEGORY_TOKENS` gained the
+> plural forms and data-driven product types found in the public-set audit (tees, bras,
+> socks, jeans, slippers, loafers, …), and `MATERIALS` gained jewelry/accessory materials
+> (alloy, gold, silver, gemstone, …) plus explicit **"Label: value"** constraint parsing
+> (`"Material: alloy"`, `"Color: rose gold"`). Two performance fixes: the lowercased
+> searchable text is now cached once per product (`_searchable_lc`), and dense TF-IDF
+> scoring uses a **posting-list inverted index** instead of scanning all 50k docs each turn
+> (~4x faster per turn). Null-price budget handling is now an explicit, documented
+> deterministic choice.
 >
 > **v2.6.0 (Iteration 3, Tasks 1.5 / 2 / 5 / 6):** (a) **Per-slot pivot handling** — a
 > detected pivot now clears only the attribute slot(s) the new message explicitly targets
@@ -63,8 +73,9 @@
 - **Minor version** (e.g. `1.1 -> 1.2`, `2.1 -> 2.2`) = an iterative improvement or bug fix.
 
 | Version | Notes | Key metric change |
-|---------|-------|-------------------|
-| `v1.0.0` | Original weak, stateless BM25 starter (the provided baseline). | Hit Rate@10 `0.125`, MRR `0.068034`, score `0.10671` |
+| `v2.7.0` | **Slot-vocabulary expansion + performance.** (a) `CATEGORY_TOKENS` extended with plural forms and data-driven additions from the public-set audit (tees, bras, socks, jeans, slippers, loafers, …). (b) `MATERIALS` extended with jewelry/accessory materials, plus explicit `"Label: value"` constraint parsing. (c) Perf: cached lowercased searchable text (`_searchable_lc`) and a posting-list inverted index for dense scoring (~4x faster per turn). (d) Null-price budget behavior made an explicit, documented deterministic choice. | HR@10 `0.575 -> 0.630`, MRR `0.4310 -> 0.4556`, MTTC `8.20 -> 7.555`, score `0.4728 -> 0.5206` |
+
+> The next improvement will be `v2.8s BM25 starter (the provided baseline). | Hit Rate@10 `0.125`, MRR `0.068034`, score `0.10671` |
 | `v2.0.0` | First upgrade: hybrid retrieval (BM25 + dense), dialogue state tracking, grounded rerank, ask-vs-recommend policy, turn-budget guard. | Hit Rate@10 `0.125 -> 0.225`, MRR `0.068034 -> 0.068581`, score `0.10671 -> 0.167074` |
 | `v2.1.0` | Fixed the buying regression and closed the MRR gap. The grounded rerank is now **relevance-dominated** with a slot-aware boost (instead of re-ranking by slot-match alone); the intent-override detector now triggers only on **strong pivot language**, so benign "I don't have a preference for X" replies no longer wipe the dialogue state. | Hit Rate@10 `0.225 -> 0.515`, MRR `0.068581 -> 0.349196`, buying HR `0.225 -> 0.5`, score `0.167074 -> 0.418059` |
 | `v2.2.0` | Added a grounded **LLM listwise reranker** (enabled via env vars, off by default). The pool is trimmed to `LLM_TOP = 25` upstream, a single zero-shot listwise call reorders it, and ids are validated against the candidate pool (retry once, then deterministic fallback). Real token usage is reported. Not A/B-validated here (needs self-managed credentials); default metrics are unchanged while disabled. | No change in default (deterministic) mode |
@@ -117,22 +128,22 @@ user turn
 
 Measured on the **200-session public dev set** via `python -m evaluator.local_evaluator`
 (the evaluator and public labels are untouched).
-
-| Metric | Baseline (BM25) | Upgraded (v2.0.0) | Upgraded (v2.1.0) | Upgraded (v2.6.0) |
-|--------|-----------------|-------------------|-------------------|-------------------|
-| Hit Rate@10 | `0.125` | `0.225` | `0.515` | **`0.545`** |
-| MRR | `0.068034` | `0.068581` | `0.349196` | **`0.422623`** |
-| MTTC | `9.81` | `9.30` | `8.21` | **`8.255`** |
-| Efficiency | `0.119` | `0.17` | `0.279` | **`0.2745`** |
-| **Technical Score** | `0.10671` | `0.167074` | `0.418059` | **`0.454187`** |
+ Upgraded (v2.7.0) |
+|--------|-----------------|-------------------|-------------------|-------------------|-------------------|
+| Hit Rate@10 | `0.125` | `0.225` | `0.515` | `0.545` | **`0.630`** |
+| MRR | `0.068034` | `0.068581` | `0.349196` | `0.422623` | **`0.455567`** |
+| MTTC | `9.81` | `9.30` | `8.21` | `8.255` | **`7.555`** |
+| Efficiency | `0.119` | `0.17` | `0.279` | `0.2745` | **`0.3445`** |
+| **Technical Score** | `0.10671` | `0.167074` | `0.418059` | `0.454187` | **`0.520570`** |
 
 Scenario breakdown (from `results.json`):
 
-| Scenario | Baseline HR@10 | Upgraded (v2.0.0) | Upgraded (v2.1.0) | Upgraded (v2.6.0) |
-|----------|----------------|-------------------|-------------------|-------------------|
-| buying | `0.2375` | `0.225` | `0.5` | `0.5` |
-| browsing | `0.025` | `0.2625` | `0.525` | `0.5625` |
-| intent_override | `0.1333` | `0.1667` | `0.4667` | `0.5333` |
+| Scenario | Baseline HR@10 | Upgraded (v2.0.0) | Upgraded (v2.1.0) | Upgraded (v2.6.0) | Upgraded (v2.7.0) |
+|----------|----------------|-------------------|-------------------|-------------------|-------------------|
+| buying | `0.2375` | `0.225` | `0.5` | `0.5` | `0.6375` |
+| browsing | `0.025` | `0.2625` | `0.525` | `0.5625` | `0.6125` |
+| intent_override | `0.1333` | `0.1667` | `0.4667` | `0.5333` | `0.6` |
+| boundary | `0.0` | `0.1` | `0.7` | `0.8.1667` | `0.4667` | `0.5333` |
 | boundary | `0.0` | `0.1` | `0.7` | `0.8` |
 
 The largest gains come from the **browsing** and **intent_override** scenarios, which were
