@@ -25,7 +25,19 @@ if str(REPO) not in sys.path:
 from starter.agent import Agent  # noqa: E402
 
 
-def _has_libs() -> bool:
+def _has_numpy() -> bool:
+    try:
+        import numpy  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def _embed_enabled() -> bool:
+    """True only when embeddings are explicitly enabled (COPILOT_DENSE=embed)."""
+    import os
+    if os.environ.get("COPILOT_DENSE") != "embed":
+        return False
     try:
         import numpy  # noqa: F401
         import sentence_transformers  # noqa: F401
@@ -67,7 +79,7 @@ def test_dense_mode_falls_back_to_tfidf(monkeypatch):
     assert agent.order[scores[0][0]] == "A"
 
 
-@pytest.mark.skipif(not _has_libs(), reason="numpy / sentence-transformers not installed")
+@pytest.mark.skipif(not _has_numpy(), reason="numpy not installed")
 def test_embed_dense_scores_ranks_by_similarity():
     """Embedding cosine scoring should order docs by descending similarity."""
     import numpy as np
@@ -87,7 +99,7 @@ def test_embed_dense_scores_ranks_by_similarity():
     assert res[1] == (1, 0.0)
 
 
-@pytest.mark.skipif(not _has_libs(), reason="numpy / sentence-transformers not installed")
+@pytest.mark.skipif(not _embed_enabled(), reason="embeddings not enabled (set COPILOT_DENSE=embed and install numpy+sentence-transformers)")
 def test_browsing_hr_embed_vs_tfidf():
     """Hit Rate@10 for browsing sessions: TF-IDF vs sentence embeddings.
 
@@ -105,9 +117,9 @@ def test_browsing_hr_embed_vs_tfidf():
     for mode in ("tfidf", "embed"):
         import os
         if mode == "tfidf":
-            os.environ["COPILOT_EMBED_MODEL"] = "__nonexistent__"  # forces fallback to TF-IDF
+            os.environ["COPILOT_DENSE"] = ""  # force TF-IDF path
         else:
-            os.environ.pop("COPILOT_EMBED_MODEL", None)
+            os.environ["COPILOT_DENSE"] = "embed"  # use sentence embeddings
         samples = [s for s in load_jsonl(REPO / "data" / "public_set.jsonl") if s["scenario_type"] == "browsing"]
         catalog_ids, categories, products = catalog_index(REPO / "data" / "catalog.jsonl")
         agent = Agent(REPO / "data" / "catalog.jsonl")

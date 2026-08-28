@@ -1,0 +1,58 @@
+{
+  "entropy_policy": {
+    "policy": "entropy",
+    "n_sessions": 200,
+    "n_asks": 1269,
+    "mean_pool_reduction": 1.16,
+    "mean_reduction_pct": 0.3867,
+    "zero_reduction_share": 0.8976,
+    "scenario": {
+      "boundary": {
+        "n": 68,
+        "mean_reduction": 0.5882
+      },
+      "browsing": {
+        "n": 541,
+        "mean_reduction": 1.2828
+      },
+      "buying": {
+        "n": 462,
+        "mean_reduction": 0.8615
+      },
+      "intent_override": {
+        "n": 198,
+        "mean_reduction": 1.7172
+      }
+    },
+    "seconds": 321.8
+  },
+  "random_baseline": {
+    "policy": "random",
+    "n_sessions": 200,
+    "n_asks": 1084,
+    "mean_pool_reduction": 0.9262,
+    "mean_reduction_pct": 0.3087,
+    "zero_reduction_share": 0.9345,
+    "scenario": {
+      "boundary": {
+        "n": 61,
+        "mean_reduction": 0.7377
+      },
+      "browsing": {
+        "n": 450,
+        "mean_reduction": 0.8778
+      },
+      "buying": {
+        "n": 387,
+        "mean_reduction": 0.876
+      },
+      "intent_override": {
+        "n": 186,
+        "mean_reduction": 1.2097
+      }
+    },
+    "seconds": 145.2
+  },
+  "reduction_gain": 0.2338,
+  "reduction_gain_pct": 25.2429
+}
