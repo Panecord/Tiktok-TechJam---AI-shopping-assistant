@@ -1,4 +1,4 @@
-# Improved Agent — Track 4 Shopping Copilot (v2.6.0)
+# Improved Agent — Track 4 Shopping Copilot (v2.6.1)
 
 > **Updated with AI.** This document describes the upgraded `starter/agent.py` that
 > replaces the weak, stateless BM25 baseline (v1.0.0) shipped with the challenge.
@@ -71,7 +71,8 @@
 | `v2.3.0` | Replaced the pure-Python TF-IDF dense retrieval with a **sentence-embedding** model (Sentence-BERT, inference only, no fine-tuning). Catalog embedded once at startup, queries embedded per turn, cosine similarity in-memory. Embeddings are opt-in (`COPILOT_DENSE=embed`); otherwise the fast TF-IDF path is used. The browsing-session A/B test is included but skipped until embeddings are enabled. | No change in default (TF-IDF) mode |
 | `v2.4.0` | Replaced the hand-set RRF_K / slot-boost combination with **learned fusion weights** (small logistic regression on the public dev set, features [bm25, dense, slot, price]). RRF still forms the pool (recall-preserving); the learned score drives the final ordering. Train/val AUC `0.873 / 0.821`; 40-session A/B showed no HR change and a small MRR/score gain. Hand-tuned path kept as a documented fallback. | 40-session A/B: MRR `0.3719 -> 0.3746`, score `0.4176 -> 0.4179` (no HR change); full-set hand-tuned equals v2.2.0 (`0.515` / `0.3492` / `0.4181`) |
 | `v2.5.0` | **LLM reranker cost/latency fix.** `_rerank` now takes a `use_llm` flag: the LLM listwise call runs only on the **recommend branch**, not every clarifying turn. `_rerank_llm` retries only on a **grounding violation** and falls back to deterministic immediately on a transport/HTTP error or timeout (no retry stacking under rate limiting). Per-call HTTP timeout raised 20s -> 30s (observed latency 4-6s, can spike). LLM calls cut from ~12/session to ~1.3/session. | No change in default (deterministic) mode; full-set LLM validation now bounded (~1.3 LLM calls/session) |
-| `v2.6.0` | **Per-slot pivot handling + diagnostics.** (a) A pivot now clears only the slot(s) the new message targets (full reset only via "forget all that"). (b) `_retrieve()` exposes the fused pool for a **pool-recall** diagnostic. (c) Session-level 5-fold CV for the learned fusion. (d) Clarifying-question quality diagnostic (entropy vs random). | Full-set **pool recall `0.960` vs HR@10 `0.545`** -> bottleneck is ranking, not retrieval. Intent-override HR unchanged at `0.533` (no regression). |
+| `v2.6.0` | **Per-slot pivot handling + diagnostics.** (a) A pivot now clears only the slot(s) the new message targets (full reset only via "forget all that"). (b) `_retrieve()` exposes the fused pool for a **pool-recall** diagnostic. (c) Session-level 5-fold CV for the learned fusion. (d) Clarifying-question quality diagnostic (entropy vs random). | Full-set **pool recall `0.960` vs HR@10 `0.545`** -> bottleneck is ranking, not retrieval. Full-set: HR@10 `0.545`, MRR `0.422623`, MTTC `8.255`, score `0.454187`. Intent-override HR `0.5333` (no regression). |
+| `v2.6.1` | Dense retrieval now folds the accumulated slot values into its query (via `_dense_query`, token-de-duplicated) instead of scoring the raw message only — the dominant learned-fusion (dense) signal was previously blind to earlier-turn constraints. | HR@10 `0.545 -> 0.575`, MRR `0.4226 -> 0.4310`, MTTC `8.255 -> 8.20`, score `0.4542 -> 0.4728` |
 
 > The next improvement will be `v2.7.0`.
 
@@ -117,22 +118,22 @@ user turn
 Measured on the **200-session public dev set** via `python -m evaluator.local_evaluator`
 (the evaluator and public labels are untouched).
 
-| Metric | Baseline (BM25) | Upgraded (v2.0.0) | Upgraded (v2.1.0) |
-|--------|-----------------|-------------------|-------------------|
-| Hit Rate@10 | `0.125` | `0.225` | **`0.515`** |
-| MRR | `0.068034` | `0.068581` | **`0.349196`** |
-| MTTC | `9.81` | `9.30` | **`8.21`** |
-| Efficiency | `0.119` | `0.17` | **`0.279`** |
-| **Technical Score** | `0.10671` | `0.167074` | **`0.418059`** |
+| Metric | Baseline (BM25) | Upgraded (v2.0.0) | Upgraded (v2.1.0) | Upgraded (v2.6.0) |
+|--------|-----------------|-------------------|-------------------|-------------------|
+| Hit Rate@10 | `0.125` | `0.225` | `0.515` | **`0.545`** |
+| MRR | `0.068034` | `0.068581` | `0.349196` | **`0.422623`** |
+| MTTC | `9.81` | `9.30` | `8.21` | **`8.255`** |
+| Efficiency | `0.119` | `0.17` | `0.279` | **`0.2745`** |
+| **Technical Score** | `0.10671` | `0.167074` | `0.418059` | **`0.454187`** |
 
 Scenario breakdown (from `results.json`):
 
-| Scenario | Baseline HR@10 | Upgraded (v2.0.0) | Upgraded (v2.1.0) |
-|----------|----------------|-------------------|-------------------|
-| buying | `0.2375` | `0.225` | `0.5` |
-| browsing | `0.025` | `0.2625` | `0.525` |
-| intent_override | `0.1333` | `0.1667` | `0.4667` |
-| boundary | `0.0` | `0.1` | `0.7` |
+| Scenario | Baseline HR@10 | Upgraded (v2.0.0) | Upgraded (v2.1.0) | Upgraded (v2.6.0) |
+|----------|----------------|-------------------|-------------------|-------------------|
+| buying | `0.2375` | `0.225` | `0.5` | `0.5` |
+| browsing | `0.025` | `0.2625` | `0.525` | `0.5625` |
+| intent_override | `0.1333` | `0.1667` | `0.4667` | `0.5333` |
+| boundary | `0.0` | `0.1` | `0.7` | `0.8` |
 
 The largest gains come from the **browsing** and **intent_override** scenarios, which were
 near-zero for the baseline because it never asked questions and never handled pivots.

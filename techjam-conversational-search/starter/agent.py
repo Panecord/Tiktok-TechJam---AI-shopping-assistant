@@ -536,6 +536,29 @@ class Agent:
                 terms.extend(t for t in _terms(str(value)) if t not in STOPWORDS)
         return " OR ".join(f'"{term}"' for term in terms[:40])
 
+    def _dense_query(self, message: str, slots: dict[str, Any]) -> str:
+        """Build the dense-retrieval query text (message + accumulated slot values).
+
+        BM25 already folds slot values into its query, but the dense similarity was
+        previously computed on the raw message alone — so the dominant learned-fusion
+        signal (dense weight ~11) was blind to the shopper's accumulated constraints.
+        Tokens are de-duplicated so a slot value already present in the message (e.g.
+        the category) is not double-weighted in the TF-IDF query vector.
+        """
+        # Updated with AI
+        parts = [message]
+        for attr in ("material", "color", "size", "style", "use_case", "category"):
+            value = slots.get(attr)
+            if value:
+                parts.append(str(value))
+        seen: set[str] = set()
+        tokens: list[str] = []
+        for token in _terms(" ".join(parts)):
+            if token not in seen:
+                seen.add(token)
+                tokens.append(token)
+        return " ".join(tokens)
+
     # -- Slot-aware re-scoring ------------------------------------------------
     def _slot_match_score(self, product: dict, slots: dict[str, Any]) -> float:
         """Score how well a product satisfies known slot constraints (0..1)."""
@@ -625,7 +648,7 @@ class Agent:
 
         dense_ranked: list[str] = []
         dense_score: dict[str, float] = {}
-        for rank, (doc_idx, sim) in enumerate(self._dense_scores(message)):
+        for rank, (doc_idx, sim) in enumerate(self._dense_scores(self._dense_query(message, slots))):
             if rank >= DENSE_TOP:
                 break
             asin = self.order[doc_idx]
