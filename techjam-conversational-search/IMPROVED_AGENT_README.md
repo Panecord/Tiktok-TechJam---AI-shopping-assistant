@@ -1,7 +1,15 @@
-# Improved Agent — Track 4 Shopping Copilot (v2.2.0)
+# Improved Agent — Track 4 Shopping Copilot (v2.3.0)
 
 > **Updated with AI.** This document describes the upgraded `starter/agent.py` that
 > replaces the weak, stateless BM25 baseline (v1.0.0) shipped with the challenge.
+>
+> **v2.3.0 (Iteration 2, Task 3):** replaced the pure-Python TF-IDF dense retrieval with a
+> pretrained **sentence-embedding** model (Sentence-BERT, inference only, no fine-tuning).
+> The catalog is embedded once at startup; queries are embedded per turn and scored by
+> cosine similarity. When `sentence-transformers` / `numpy` are not installed it falls back
+> to the previous TF-IDF path, so the agent stays runnable. Default (fallback) metrics are
+> unchanged; the browsing-session A/B (TF-IDF vs embeddings) is wired up but only runs when
+> the libraries are present.
 >
 > **v2.2.0 (Iteration 2, Task 2):** wired up the grounded **LLM listwise reranker**. The
 > candidate pool is trimmed upstream to `LLM_TOP = 25` by the deterministic fusion, then a
@@ -30,8 +38,9 @@
 | `v2.0.0` | First upgrade: hybrid retrieval (BM25 + dense), dialogue state tracking, grounded rerank, ask-vs-recommend policy, turn-budget guard. | Hit Rate@10 `0.125 -> 0.225`, MRR `0.068034 -> 0.068581`, score `0.10671 -> 0.167074` |
 | `v2.1.0` | Fixed the buying regression and closed the MRR gap. The grounded rerank is now **relevance-dominated** with a slot-aware boost (instead of re-ranking by slot-match alone); the intent-override detector now triggers only on **strong pivot language**, so benign "I don't have a preference for X" replies no longer wipe the dialogue state. | Hit Rate@10 `0.225 -> 0.515`, MRR `0.068581 -> 0.349196`, buying HR `0.225 -> 0.5`, score `0.167074 -> 0.418059` |
 | `v2.2.0` | Added a grounded **LLM listwise reranker** (enabled via env vars, off by default). The pool is trimmed to `LLM_TOP = 25` upstream, a single zero-shot listwise call reorders it, and ids are validated against the candidate pool (retry once, then deterministic fallback). Real token usage is reported. Not A/B-validated here (needs self-managed credentials); default metrics are unchanged while disabled. | No change in default (deterministic) mode |
+| `v2.3.0` | Replaced the pure-Python TF-IDF dense retrieval with a **sentence-embedding** model (Sentence-BERT, inference only, no fine-tuning). Catalog embedded once at startup, queries embedded per turn, cosine similarity in-memory. Automatically falls back to TF-IDF when `numpy` / `sentence-transformers` are absent. The browsing-session A/B test is included but skipped until the libraries are installed. | No change in default (fallback) mode |
 
-> The next improvement will be `v2.3.0`.
+> The next improvement will be `v2.4.0`.
 
 ## 1. Summary of What Changed
 
@@ -104,12 +113,15 @@ Three artifacts are built once at startup from `data/catalog.jsonl`:
 1. **`self.products`** — `parent_asin -> product dict` (the frozen catalog held in memory).
 2. **BM25 index** — an in-memory SQLite FTS5 virtual table over
    `title, categories, features, details, store, description`.
-3. **Dense TF-IDF index** — a pure-Python in-memory sparse matrix:
-   - Each product's searchable text is tokenised and counted.
-   - A vocabulary is built from terms with document frequency `2..=60%` of the catalog,
-     capped at the top `60,000` terms by document frequency.
-   - Per-product sparse `{term_index: count}` vectors and L2 norms are stored.
-   - Query scoring is cosine similarity over the in-memory arrays (no external vector DB).
+3. **Dense index** — a pretrained **sentence-embedding** model (Sentence-BERT, inference
+   only, no fine-tuning) when the libraries are present, otherwise the pure-Python TF-IDF
+   sparse matrix:
+   - Sentence embeddings: catalog embedded once at startup, query embedded per turn,
+     cosine similarity over an in-memory matrix.
+   - TF-IDF fallback: product text tokenised and counted; vocabulary built from terms
+     with document frequency `2..=60%` of the catalog, capped at the top `60,000`;
+     sparse vectors + L2 norms stored, scored by cosine similarity.
+   - No external vector DB (spec §3).
 
 > Design note: no vector database, no fine-tuned model. Everything runs in-process on the
 > 50k-product catalog, which fits comfortably in memory (spec §3).
@@ -230,6 +242,7 @@ All constants live at module top-level in `starter/agent.py` and are tuned again
 | `MARGIN_THRESHOLD` | `0.20` | relative margin between top-2 scores for "confident" |
 | `FORCE_RECOMMEND_TURN` | `9` | turn at which we force a recommendation |
 | `LLM_TOP` | `25` | candidate pool size passed to the LLM reranker (trimmed upstream) |
+| `DEFAULT_EMBED_MODEL` | `all-MiniLM-L6-v2` | pretrained sentence-embedding model used for dense retrieval (via `COPILOT_EMBED_MODEL`) |
 
 ## 5. Optional LLM Reranker (self-managed credentials)
 

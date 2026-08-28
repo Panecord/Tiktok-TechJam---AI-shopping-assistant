@@ -171,6 +171,10 @@ LLM_MODEL_ENV = "COPILOT_LLM_MODEL"
 # upstream by the deterministic fusion, so a single listwise call covers it).
 LLM_TOP = 25
 
+# Optional sentence-embedding dense retrieval (inference only, no fine-tuning).
+EMBED_MODEL_ENV = "COPILOT_EMBED_MODEL"
+DEFAULT_EMBED_MODEL = "all-MiniLM-L6-v2"
+
 
 def _classify_constraint(value: str) -> str:
     """Map a natural-language constraint string to an attribute name."""
@@ -355,8 +359,46 @@ class Agent:
             cursor.executemany("INSERT INTO products VALUES (?, ?, ?, ?, ?, ?, ?)", batch)
         self.connection.commit()
 
-    # -- In-memory dense TF-IDF (no external vector DB) ----------------------
+    # -- In-memory dense retrieval (sentence embeddings, fallback to TF-IDF) --
     def _build_dense_index(self) -> None:
+        """Build the dense index: sentence embeddings if available, else TF-IDF.
+
+        Inference only (no fine-tuning). The catalog is embedded once at startup and
+        kept in memory; queries are embedded per turn and scored by cosine similarity.
+        A graceful fallback keeps the agent runnable when `sentence-transformers` (and
+        its model weights) are not available, and preserves the fast TF-IDF path.
+        """
+        # Updated with AI
+        self.dense_mode = "tfidf"
+        try:
+            import numpy as np  # type: ignore[import-not-found]  # noqa: F401
+            from sentence_transformers import SentenceTransformer  # type: ignore[import-not-found]
+        except Exception:
+            SentenceTransformer = None
+        model_name = os.environ.get(EMBED_MODEL_ENV, DEFAULT_EMBED_MODEL)
+        if SentenceTransformer is not None:
+            try:
+                self._embed_model = SentenceTransformer(model_name)
+                self._build_embed_index()
+                self.dense_mode = "embed"
+                return
+            except Exception:
+                self._embed_model = None
+        self._build_tfidf_index()
+        self.dense_mode = "tfidf"
+
+    def _build_embed_index(self) -> None:
+        """Embed every catalog product once and store the normalized matrix."""
+        # Updated with AI
+        import numpy as np  # type: ignore[import-not-found]
+        texts = [_searchable_text(self.products[asin]) for asin in self.order]
+        emb = self._embed_model.encode(
+            texts, batch_size=64, normalize_embeddings=True, show_progress_bar=False
+        )
+        self._emb_matrix = np.asarray(emb, dtype=np.float32)
+
+    def _build_tfidf_index(self) -> None:
+        """Build the in-memory sparse TF-IDF index (fallback path)."""
         # Updated with AI
         n_docs = len(self.order)
         doc_freqs: list[Counter] = []
@@ -394,10 +436,30 @@ class Agent:
             self._doc_norms.append(math.sqrt(norm_sq) or 1.0)
 
     def _dense_scores(self, query: str) -> list[tuple[int, float]]:
-        """Cosine-similarity of the query against every catalog doc.
+        """Cosine similarity of the query against every catalog doc.
 
-        Returns a list of (doc_index, score) for docs with a non-zero score.
+        Returns (doc_index, score) pairs sorted by score descending. Uses sentence
+        embeddings when available, otherwise the TF-IDF fallback.
         """
+        # Updated with AI
+        if getattr(self, "dense_mode", "tfidf") == "embed":
+            return self._embed_dense_scores(query)
+        return self._tfidf_dense_scores(query)
+
+    def _embed_dense_scores(self, query: str) -> list[tuple[int, float]]:
+        """Embed the query and rank catalog docs by cosine similarity."""
+        # Updated with AI
+        import numpy as np  # type: ignore[import-not-found]
+        q = self._embed_model.encode([query], normalize_embeddings=True, show_progress_bar=False)[0]
+        sims = self._emb_matrix @ q
+        order = np.argsort(-sims)
+        results: list[tuple[int, float]] = []
+        for idx in order[:DENSE_TOP]:
+            results.append((int(idx), float(sims[idx])))
+        return results
+
+    def _tfidf_dense_scores(self, query: str) -> list[tuple[int, float]]:
+        """Original TF-IDF cosine scoring (fallback path)."""
         # Updated with AI
         q_counts = Counter(_terms(query))
         q_vec: dict[int, float] = {}
