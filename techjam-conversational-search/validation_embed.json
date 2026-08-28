@@ -1,0 +1,26 @@
+{
+  "HR": 0.555,
+  "MRR": 0.36564087301587306,
+  "MTTC": 8.125,
+  "efficiency": 0.2875,
+  "score": 0.44469226190476197,
+  "scenario_metrics": {
+    "buying": {
+      "HR": 0.55,
+      "n": 80
+    },
+    "intent_override": {
+      "HR": 0.5,
+      "n": 30
+    },
+    "browsing": {
+      "HR": 0.55,
+      "n": 80
+    },
+    "boundary": {
+      "HR": 0.8,
+      "n": 10
+    }
+  },
+  "seconds": 239.1
+}

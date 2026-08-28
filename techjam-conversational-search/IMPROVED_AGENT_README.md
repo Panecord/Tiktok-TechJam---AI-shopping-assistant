@@ -1,15 +1,45 @@
-# Improved Agent — Track 4 Shopping Copilot (v2.3.0)
+# Improved Agent — Track 4 Shopping Copilot (v2.6.0)
 
 > **Updated with AI.** This document describes the upgraded `starter/agent.py` that
 > replaces the weak, stateless BM25 baseline (v1.0.0) shipped with the challenge.
 >
+> **v2.6.0 (Iteration 3, Tasks 1.5 / 2 / 5 / 6):** (a) **Per-slot pivot handling** — a
+> detected pivot now clears only the attribute slot(s) the new message explicitly targets
+> (e.g. "actually, blue not red" overwrites `color` only), preserving the rest of the
+> dialogue state (TRADE-style independent slot updates); only a strong full-reset phrase
+> ("forget all that") clears everything. (b) **Pool-recall instrumentation** — `_retrieve()`
+> exposes `_last_candidates`, and a new diagnostic reports **pool recall** (target present
+> anywhere in the fused pool) alongside HR@10 / MRR / MTTC. The full-set result is
+> **pool recall `0.960` vs HR@10 `0.545`** — i.e. the target is retrieved ~96% of the time
+> but only ranked top-10 ~54.5% of the time, so the bottleneck is **ranking/selection, not
+> retrieval** (widening `BM25_TOP`/`DENSE_TOP` would add cost/noise without fixing it). (c)
+> Session-level **5-fold CV** for the learned fusion replaces the single holdout (see
+> `validation_fusion_cv.json`). (d) A **clarifying-question quality** diagnostic compares the
+> entropy-based `_choose_ask_attribute` pool-size reduction against a random baseline.
+>
+> **v2.5.0 (Iteration 2 follow-up / LLM cost-latency fix):** the grounded **LLM listwise
+> reranker** is now gated so it runs **only on the recommend branch** (via a `use_llm`
+> parameter threaded through `_rerank`), instead of being called on every clarifying turn.
+> In addition, `_rerank_llm` now retries **only on a grounding violation** (an id outside the
+> candidate pool) and falls back to the deterministic reranker **immediately** on a
+> transport/HTTP error or timeout, so rate-limit errors no longer stack retry latency. The
+> per-call HTTP timeout was raised from 20s to 30s (observed latency is 4-6s, but can spike
+> under load). This cut LLM calls from ~12/session to ~1.3/session (recommend turns only).
+>
+> **v2.4.0 (Iteration 2, Task 4):** replaced the hand-set RRF_K / slot-boost combination
+> with **learned fusion weights** fitted by a small logistic regression (classical
+> learning-to-rank, not LLM fine-tuning) on the public dev sessions, over features [BM25,
+> dense, slot-match, price-distance]. The candidate pool is still formed by RRF
+> (recall-preserving), and the learned score drives the final ordering. A 70/30 holdout gave
+> train AUC `0.873` / val AUC `0.821` (no severe overfit). On a 40-session A/B the learned
+> fusion nudged MRR `0.3719 -> 0.3746` and score `0.4176 -> 0.4179` with no Hit Rate change;
+> the hand-tuned path is kept as a documented fallback (`USE_LEARNED_FUSION = False`).
+>
 > **v2.3.0 (Iteration 2, Task 3):** replaced the pure-Python TF-IDF dense retrieval with a
 > pretrained **sentence-embedding** model (Sentence-BERT, inference only, no fine-tuning).
 > The catalog is embedded once at startup; queries are embedded per turn and scored by
-> cosine similarity. When `sentence-transformers` / `numpy` are not installed it falls back
-> to the previous TF-IDF path, so the agent stays runnable. Default (fallback) metrics are
-> unchanged; the browsing-session A/B (TF-IDF vs embeddings) is wired up but only runs when
-> the libraries are present.
+> cosine similarity. Embeddings are opt-in (`COPILOT_DENSE=embed`); otherwise the fast TF-IDF
+> path is used so the default run never attempts a model download.
 >
 > **v2.2.0 (Iteration 2, Task 2):** wired up the grounded **LLM listwise reranker**. The
 > candidate pool is trimmed upstream to `LLM_TOP = 25` by the deterministic fusion, then a
@@ -38,9 +68,12 @@
 | `v2.0.0` | First upgrade: hybrid retrieval (BM25 + dense), dialogue state tracking, grounded rerank, ask-vs-recommend policy, turn-budget guard. | Hit Rate@10 `0.125 -> 0.225`, MRR `0.068034 -> 0.068581`, score `0.10671 -> 0.167074` |
 | `v2.1.0` | Fixed the buying regression and closed the MRR gap. The grounded rerank is now **relevance-dominated** with a slot-aware boost (instead of re-ranking by slot-match alone); the intent-override detector now triggers only on **strong pivot language**, so benign "I don't have a preference for X" replies no longer wipe the dialogue state. | Hit Rate@10 `0.225 -> 0.515`, MRR `0.068581 -> 0.349196`, buying HR `0.225 -> 0.5`, score `0.167074 -> 0.418059` |
 | `v2.2.0` | Added a grounded **LLM listwise reranker** (enabled via env vars, off by default). The pool is trimmed to `LLM_TOP = 25` upstream, a single zero-shot listwise call reorders it, and ids are validated against the candidate pool (retry once, then deterministic fallback). Real token usage is reported. Not A/B-validated here (needs self-managed credentials); default metrics are unchanged while disabled. | No change in default (deterministic) mode |
-| `v2.3.0` | Replaced the pure-Python TF-IDF dense retrieval with a **sentence-embedding** model (Sentence-BERT, inference only, no fine-tuning). Catalog embedded once at startup, queries embedded per turn, cosine similarity in-memory. Automatically falls back to TF-IDF when `numpy` / `sentence-transformers` are absent. The browsing-session A/B test is included but skipped until the libraries are installed. | No change in default (fallback) mode |
+| `v2.3.0` | Replaced the pure-Python TF-IDF dense retrieval with a **sentence-embedding** model (Sentence-BERT, inference only, no fine-tuning). Catalog embedded once at startup, queries embedded per turn, cosine similarity in-memory. Embeddings are opt-in (`COPILOT_DENSE=embed`); otherwise the fast TF-IDF path is used. The browsing-session A/B test is included but skipped until embeddings are enabled. | No change in default (TF-IDF) mode |
+| `v2.4.0` | Replaced the hand-set RRF_K / slot-boost combination with **learned fusion weights** (small logistic regression on the public dev set, features [bm25, dense, slot, price]). RRF still forms the pool (recall-preserving); the learned score drives the final ordering. Train/val AUC `0.873 / 0.821`; 40-session A/B showed no HR change and a small MRR/score gain. Hand-tuned path kept as a documented fallback. | 40-session A/B: MRR `0.3719 -> 0.3746`, score `0.4176 -> 0.4179` (no HR change); full-set hand-tuned equals v2.2.0 (`0.515` / `0.3492` / `0.4181`) |
+| `v2.5.0` | **LLM reranker cost/latency fix.** `_rerank` now takes a `use_llm` flag: the LLM listwise call runs only on the **recommend branch**, not every clarifying turn. `_rerank_llm` retries only on a **grounding violation** and falls back to deterministic immediately on a transport/HTTP error or timeout (no retry stacking under rate limiting). Per-call HTTP timeout raised 20s -> 30s (observed latency 4-6s, can spike). LLM calls cut from ~12/session to ~1.3/session. | No change in default (deterministic) mode; full-set LLM validation now bounded (~1.3 LLM calls/session) |
+| `v2.6.0` | **Per-slot pivot handling + diagnostics.** (a) A pivot now clears only the slot(s) the new message targets (full reset only via "forget all that"). (b) `_retrieve()` exposes the fused pool for a **pool-recall** diagnostic. (c) Session-level 5-fold CV for the learned fusion. (d) Clarifying-question quality diagnostic (entropy vs random). | Full-set **pool recall `0.960` vs HR@10 `0.545`** -> bottleneck is ranking, not retrieval. Intent-override HR unchanged at `0.533` (no regression). |
 
-> The next improvement will be `v2.4.0`.
+> The next improvement will be `v2.7.0`.
 
 ## 1. Summary of What Changed
 
@@ -241,6 +274,8 @@ All constants live at module top-level in `starter/agent.py` and are tuned again
 | `K_SMALL` | `25` | pool size below which we consider recommending |
 | `MARGIN_THRESHOLD` | `0.20` | relative margin between top-2 scores for "confident" |
 | `FORCE_RECOMMEND_TURN` | `9` | turn at which we force a recommendation |
+| `USE_LEARNED_FUSION` | `True` | use the learned logistic-regression fusion weights (False = hand-tuned fallback) |
+| `FUSION_WEIGHTS` | `{bm25:2.61, dense:11.34, slot:2.04, price:0.0, bias:-4.65}` | learned fusion weights (fitted on the public dev set) |
 | `LLM_TOP` | `25` | candidate pool size passed to the LLM reranker (trimmed upstream) |
 | `DEFAULT_EMBED_MODEL` | `all-MiniLM-L6-v2` | pretrained sentence-embedding model used for dense retrieval (via `COPILOT_EMBED_MODEL`) |
 

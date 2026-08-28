@@ -1,0 +1,31 @@
+{
+  "HR": 0.555,
+  "MRR": 0.3556884920634921,
+  "MTTC": 8.125,
+  "efficiency": 0.2875,
+  "score": 0.44170654761904765,
+  "scenario_metrics": {
+    "buying": {
+      "HR": 0.55,
+      "n": 80
+    },
+    "intent_override": {
+      "HR": 0.5,
+      "n": 30
+    },
+    "browsing": {
+      "HR": 0.55,
+      "n": 80
+    },
+    "boundary": {
+      "HR": 0.8,
+      "n": 10
+    }
+  },
+  "llm_calls": 206,
+  "prompt_tokens": 133362,
+  "completion_tokens": 32524,
+  "total_tokens": 165886,
+  "avg_tokens_per_session": 829.4,
+  "seconds": 5942.2
+}

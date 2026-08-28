@@ -98,6 +98,16 @@ def _searchable_text(product: dict) -> str:
     return " ".join(parts).strip()
 
 
+def _parse_money(value: object) -> float | None:
+    """Parse a price into a float, tolerating strings like '$5.99' / 'from 5.99'."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    m = re.search(r"\d+(?:\.\d+)?", str(value))
+    return float(m.group(0)) if m else None
+
+
 # ---------------------------------------------------------------------------
 # Attribute vocabulary used for slot extraction / product attribute matching
 # ---------------------------------------------------------------------------
@@ -159,6 +169,13 @@ DENSE_TOP = 200
 FUSED_POOL = 300
 RRF_K = 60.0
 SLOT_BOOST_WEIGHT = 0.5   # weight of the slot-match signal in the rerank score
+
+# Learned fusion weights (fitted by logistic regression on the public dev set). These
+# replace the hand-set RRF_K / SLOT_BOOST_WEIGHT combination. Set USE_LEARNED_FUSION to
+# False to fall back to the hand-tuned path (e.g. if the learned model overfits).
+USE_LEARNED_FUSION = True
+FUSION_WEIGHTS = {"bm25": 2.6055, "dense": 11.3426, "slot": 2.0352, "price": 0.0, "bias": -4.6504}
+
 K_SMALL = 25             # candidate_pool_size <= K_SMALL => consider recommending
 MARGIN_THRESHOLD = 0.20  # relative margin between top-2 fused scores => confident
 FORCE_RECOMMEND_TURN = 9
@@ -174,6 +191,9 @@ LLM_TOP = 25
 # Optional sentence-embedding dense retrieval (inference only, no fine-tuning).
 EMBED_MODEL_ENV = "COPILOT_EMBED_MODEL"
 DEFAULT_EMBED_MODEL = "all-MiniLM-L6-v2"
+# Set COPILOT_DENSE=embed to use sentence embeddings; otherwise the fast TF-IDF path
+# is used (so the default run never attempts a model download / load).
+DENSE_MODE_ENV = "COPILOT_DENSE"
 
 
 def _classify_constraint(value: str) -> str:
@@ -209,6 +229,20 @@ def _detect_override(message: str) -> bool:
         "never mind", "changed my mind", "scratch that", "reconsider",
     )
     return any(phrase in lowered for phrase in pivot)
+
+
+# Strong reset phrases that clear ALL slots (the only case that wipes everything).
+FULL_RESET_PHRASES = (
+    "forget all that", "forget all of that", "forget everything", "start over",
+    "reset", "clear all", "ignore all that", "scratch everything", "start fresh",
+)
+
+
+def _is_full_reset(message: str) -> bool:
+    """True only for strong reset phrases that clear ALL slot state."""
+    # Updated with AI
+    lowered = message.lower()
+    return any(phrase in lowered for phrase in FULL_RESET_PHRASES)
 
 
 def _attr_value_from_text(text: str, attr: str) -> str | None:
@@ -361,15 +395,17 @@ class Agent:
 
     # -- In-memory dense retrieval (sentence embeddings, fallback to TF-IDF) --
     def _build_dense_index(self) -> None:
-        """Build the dense index: sentence embeddings if available, else TF-IDF.
+        """Build the dense index: sentence embeddings (opt-in) else TF-IDF.
 
-        Inference only (no fine-tuning). The catalog is embedded once at startup and
-        kept in memory; queries are embedded per turn and scored by cosine similarity.
-        A graceful fallback keeps the agent runnable when `sentence-transformers` (and
-        its model weights) are not available, and preserves the fast TF-IDF path.
+        Embeddings are enabled only when `COPILOT_DENSE=embed`; otherwise the fast TF-IDF
+        path is used. This avoids attempting a model download/load during the default run,
+        and keeps the agent runnable when `sentence-transformers`/weights are not present.
         """
         # Updated with AI
         self.dense_mode = "tfidf"
+        if os.environ.get(DENSE_MODE_ENV, "") != "embed":
+            self._build_tfidf_index()
+            return
         try:
             import numpy as np  # type: ignore[import-not-found]  # noqa: F401
             from sentence_transformers import SentenceTransformer  # type: ignore[import-not-found]
@@ -524,14 +560,58 @@ class Agent:
         budget = slots.get("budget")
         if budget:
             total += 1.0
-            price = product.get("price")
-            if price not in (None, "") and abs(float(price) - float(budget)) <= float(budget) * 0.30:
+            price = _parse_money(product.get("price"))
+            budget_f = _parse_money(budget)
+            if price is not None and budget_f is not None and abs(price - budget_f) <= budget_f * 0.30:
                 matched += 1.0
         return (matched / total) if total else 0.0
 
+    def _price_similarity(self, product: dict, slots: dict[str, Any]) -> float:
+        """1.0 when the product price is at the budget, decaying to 0."""
+        # Updated with AI
+        budget = _parse_money(slots.get("budget"))
+        if budget is None:
+            return 0.0
+        price = _parse_money(product.get("price"))
+        if price is None:
+            return 0.0
+        diff = abs(price - budget)
+        return max(0.0, 1.0 - diff / max(budget, 1.0))
+
+    def _feature_vector(self, asin: str, slots: dict[str, Any], bm25: float, dense: float) -> list[float]:
+        """Feature vector used by the learned/fallback fusion: [bm25, dense, slot, price]."""
+        # Updated with AI
+        product = self.products.get(asin, {})
+        return [
+            float(bm25),
+            float(dense),
+            self._slot_match_score(product, slots),
+            self._price_similarity(product, slots),
+        ]
+
+    def _linear_fusion(self, feat: list[float]) -> float:
+        """Score a candidate from its feature vector (learned or hand-tuned fallback)."""
+        # Updated with AI
+        if USE_LEARNED_FUSION:
+            w = FUSION_WEIGHTS
+            return (
+                w["bm25"] * feat[0]
+                + w["dense"] * feat[1]
+                + w["slot"] * feat[2]
+                + w["price"] * feat[3]
+                + w["bias"]
+            )
+        # Hand-tuned fallback: relevance-dominated + slot boost.
+        return (feat[0] + feat[1]) / 2.0 + SLOT_BOOST_WEIGHT * feat[2]
+
     # -- Retrieval + fusion ----------------------------------------------------
     def _retrieve(self, message: str, top_k: int, slots: dict[str, Any]) -> list[str]:
-        """Hybrid retrieval returning a grounded, fused candidate list of ASINs."""
+        """Hybrid retrieval returning a grounded, fused candidate list of ASINs.
+
+        The candidate pool is formed by reciprocal-rank fusion (recall-preserving), then
+        per-candidate features are stored so the reranker can apply the learned (or
+        hand-tuned) linear fusion weights for the final ordering.
+        """
         # Updated with AI
         query = self._bm25_query(message, slots)
         bm25_ranked: list[str] = []
@@ -544,13 +624,14 @@ class Agent:
             bm25_ranked = [str(row[0]) for row in rows]
 
         dense_ranked: list[str] = []
-        for doc_idx, _score in self._dense_scores(message):
-            dense_ranked.append(self.order[doc_idx])
-            if len(dense_ranked) >= DENSE_TOP:
+        dense_score: dict[str, float] = {}
+        for rank, (doc_idx, sim) in enumerate(self._dense_scores(message)):
+            if rank >= DENSE_TOP:
                 break
+            asin = self.order[doc_idx]
+            dense_ranked.append(asin)
+            dense_score[asin] = float(sim)
 
-        # Reciprocal-rank fusion (relevance only). The candidate pool is trimmed by
-        # relevance so that a slot mismatch does NOT push the true target out of it.
         fused: dict[str, float] = defaultdict(float)
         for rank, asin in enumerate(bm25_ranked):
             fused[asin] += 1.0 / (RRF_K + rank + 1.0)
@@ -561,18 +642,30 @@ class Agent:
         pool = [asin for asin, _score in ranked[:FUSED_POOL]]
         if not pool:
             pool = bm25_ranked[:top_k] or dense_ranked[:top_k]
-        # Grounding guarantee: every candidate is a real catalog ASIN.
-        pool = [asin for asin in pool if asin in self.products]
-        pool = pool[:max(FUSED_POOL, top_k)]
+        pool = [asin for asin in pool if asin in self.products][:max(FUSED_POOL, top_k)]
 
-        # Remember the fused relevance so the reranker can keep it as the dominant signal.
+        # Store features for the pool: rank-based BM25 + cosine dense + slot + price.
+        bm25_pos = {asin: i for i, asin in enumerate(bm25_ranked)}
+        features: dict[str, list[float]] = {}
+        for asin in pool:
+            b_norm = 1.0 / (1.0 + bm25_pos.get(asin, len(bm25_ranked)))
+            d_norm = dense_score.get(asin, 0.0)
+            features[asin] = self._feature_vector(asin, slots, b_norm, d_norm)
+        self._candidate_features = features
         self._last_fused = fused
         self._last_max_fused = max((fused.get(asin, 0.0) for asin in pool), default=1.0) or 1.0
+        # Diagnostic: expose the grounded fused candidate pool so callers can compute
+        # "pool recall" (was the target in the pool at all, independent of the top-10).
+        self._last_candidates = list(pool)
         return pool
 
     def _combined_score(self, asin: str, slots: dict[str, Any]) -> float:
-        """Relevance-dominated score with a slot-aware boost (used for rerank/margin)."""
+        """Score a candidate for rerank/margin (learned fusion, or the hand-tuned fallback)."""
         # Updated with AI
+        if USE_LEARNED_FUSION:
+            feat = getattr(self, "_candidate_features", {}).get(asin)
+            if feat is not None:
+                return self._linear_fusion(feat)
         rel = self._last_fused.get(asin, 0.0) / self._last_max_fused
         slot = self._slot_match_score(self.products.get(asin, {}), slots)
         return rel + SLOT_BOOST_WEIGHT * slot
@@ -709,8 +802,10 @@ class Agent:
             method="POST",
         )
         usage = {"prompt_tokens": 0, "completion_tokens": 0}
+        # Timeout ~30s: observed latency is 4-6s, but can spike under load. A too-short
+        # timeout would waste a full wait and fall back to deterministic on a spike.
         try:
-            with urllib.request.urlopen(req, timeout=20) as resp:
+            with urllib.request.urlopen(req, timeout=30) as resp:
                 payload = json.loads(resp.read().decode("utf-8"))
             u = payload.get("usage") or {}
             usage["prompt_tokens"] = int(u.get("prompt_tokens") or self._estimate_tokens(prompt))
@@ -731,10 +826,11 @@ class Agent:
     ) -> tuple[list[str] | None, dict[str, int]]:
         """Grounded LLM listwise rerank on a TRIMMED candidate list.
 
-        Returns (ranked_ids, usage). On a grounding violation (any id outside
-        `candidate_list`) or a request error it retries once, then returns (None, usage)
-        so the caller falls back to the deterministic reranker. Returns (None, zero
-        usage) when no LLM is configured.
+        Returns (ranked_ids, usage). On a transport/HTTP error or timeout it returns
+        (None, usage) immediately (no retry — avoids stacking retry latency under rate
+        limiting). On a grounding violation (any id outside `candidate_list`) it retries
+        once, then returns (None, usage) so the caller falls back to the deterministic
+        reranker. Returns (None, zero usage) when no LLM is configured.
         """
         # Updated with AI
         url = os.environ.get(LLM_URL_ENV)
@@ -744,12 +840,14 @@ class Agent:
         model = os.environ.get(LLM_MODEL_ENV, "shopping-copilot-rerank")
         candidate = set(candidate_list)
         total_usage = {"prompt_tokens": 0, "completion_tokens": 0}
-        for _attempt in range(2):  # initial call + one retry
+        for _attempt in range(2):  # initial call + one retry (grounding violation only)
             ranked, usage = self._call_llm_rerank(candidate_list, slots, model, url, key)
             total_usage["prompt_tokens"] += usage["prompt_tokens"]
             total_usage["completion_tokens"] += usage["completion_tokens"]
             if ranked is None:
-                continue
+                # Transport/HTTP error or timeout -> do NOT retry (avoid stacking),
+                # fall back to the deterministic reranker immediately.
+                return None, total_usage
             # Grounding: every id must be a member of the provided candidate set.
             if ranked and all(x in candidate for x in ranked):
                 cleaned: list[str] = []
@@ -757,14 +855,20 @@ class Agent:
                     if asin in candidate and asin not in cleaned:
                         cleaned.append(asin)
                 return cleaned, total_usage
+            # Grounding violation -> retry once, then fall back.
         return None, total_usage
 
-    def _rerank(self, candidate_list: list[str], slots: dict[str, Any]) -> tuple[list[str], dict[str, int]]:
-        """Grounded reranker. Returns ids selected from `candidate_list` only."""
+    def _rerank(self, candidate_list: list[str], slots: dict[str, Any], use_llm: bool = True) -> tuple[list[str], dict[str, int]]:
+        """Grounded reranker. Returns ids selected from `candidate_list` only.
+
+        The optional LLM listwise rerank is invoked only when `use_llm` is True AND
+        credentials are configured, so a session does not pay an LLM call on every
+        clarifying turn (cost/latency control).
+        """
         # Updated with AI
         deterministic = self._rerank_deterministic(candidate_list, slots)
-        if not self._llm_configured():
-            # No LLM credentials -> deterministic path, zero tokens reported honestly.
+        if not use_llm or not self._llm_configured():
+            # No LLM requested/available -> deterministic path, zero tokens reported.
             return deterministic, {"prompt_tokens": 0, "completion_tokens": 0}
 
         # Shrink the pool UPSTREAM of the LLM so a single listwise call covers it
@@ -772,7 +876,7 @@ class Agent:
         trimmed = deterministic[:LLM_TOP]
         llm_ranked, usage = self._rerank_llm(trimmed, slots)
         if llm_ranked is None:
-            # LLM failed after a retry -> deterministic fallback (keep token usage).
+            # LLM failed -> deterministic fallback (keep token usage).
             return deterministic, usage
 
         # Preserve all candidates after the LLM-ranked subset.
@@ -807,10 +911,18 @@ class Agent:
 
         # --- Intent override handling (overwrite-on-pivot, spec §2) -----------
         new_slots = _extract_slots(user_message)
-        if _detect_override(user_message):
-            # Clear previously-set attribute slots before writing the new intent.
-            for key in ("material", "color", "size", "style", "use_case", "budget", "price_max", "price_min"):
+        if _is_full_reset(user_message):
+            # Full reset (e.g. "forget all that"): clear the entire slot dict.
+            for key in list(state["slots"]):
                 state["slots"].pop(key, None)
+            state["override_consumed"] = True
+        elif _detect_override(user_message):
+            # Per-slot pivot: only clear the attribute slot(s) the new message explicitly
+            # targets (e.g. "actually, blue not red" overwrites color only), preserving
+            # the rest of the dialogue state (TRADE-style independent slot updates).
+            for key in list(state["slots"]):
+                if key in new_slots:
+                    state["slots"].pop(key, None)
             state["override_consumed"] = True
         state["slots"].update(new_slots)
 
@@ -826,12 +938,9 @@ class Agent:
         # --- Hybrid retrieval + fusion ------------------------------------------
         candidates = self._retrieve(user_message, top_k, slots)
 
-        # --- Grounded rerank (select from candidates only) ----------------------
-        ranked_ids, usage = self._rerank(candidates, slots)
-
-        # --- Ask-vs-recommend policy (deterministic) -----------------------------
+        # --- Ask-vs-recommend policy (deterministic, computed before any LLM) ---
         pool_size = len(candidates)
-        scores = self._top_scores(ranked_ids, slots)
+        scores = self._top_scores(candidates, slots)
         margin = 0.0
         if len(scores) >= 2 and scores[0] > 0:
             margin = (scores[0] - scores[1]) / scores[0]
@@ -840,6 +949,11 @@ class Agent:
             turn >= FORCE_RECOMMEND_TURN
             or (pool_size <= K_SMALL and margin >= MARGIN_THRESHOLD)
         )
+
+        # --- Grounded rerank (select from candidates only) ----------------------
+        # Cost control: the LLM reranker runs only on the recommend branch, so a
+        # session does not pay an LLM call on every clarifying turn.
+        ranked_ids, usage = self._rerank(candidates, slots, use_llm=should_recommend)
 
         if should_recommend:
             recommendations = [{"parent_asin": asin} for asin in ranked_ids[:top_k]]
