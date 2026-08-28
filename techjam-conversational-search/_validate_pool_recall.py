@@ -18,18 +18,17 @@ import json
 import sys
 import time
 from collections import defaultdict
+from pathlib import Path
 
-root = r"c:\Users\ImanKasni\OneDrive - Kuok (Singapore) Limited\Desktop\Work Documents\02 - Personal\07 - TT TechJam T4\techjam-conversational-search"
-import os
-os.chdir(root)
-sys.path.insert(0, root)
+root = Path(__file__).resolve().parent
+sys.path.insert(0, str(root))
 
 from evaluator.local_evaluator import catalog_index, evaluate, load_jsonl  # noqa: E402
 from starter.agent import Agent  # noqa: E402
 
-samples = load_jsonl("data/public_set.jsonl")
-catalog_ids, categories, products = catalog_index("data/catalog.jsonl")
-agent = Agent("data/catalog.jsonl")
+samples = load_jsonl(root / "data" / "public_set.jsonl")
+catalog_ids, categories, products = catalog_index(root / "data" / "catalog.jsonl")
+agent = Agent(root / "data" / "catalog.jsonl")
 
 _orig_respond = agent.respond
 captured = {"pools": [], "target": None}
@@ -105,6 +104,6 @@ summary = {
     },
     "seconds": round(time.time() - t0, 1),
 }
-with open("validation_pool_recall.json", "w", encoding="utf-8") as f:
+with open(root / "validation_pool_recall.json", "w", encoding="utf-8") as f:
     json.dump(summary, f, indent=2)
 print("VALIDATION_DONE", json.dumps(summary))

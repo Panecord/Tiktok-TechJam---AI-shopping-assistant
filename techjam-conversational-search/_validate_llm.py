@@ -8,13 +8,13 @@ import json
 import os
 import sys
 import time
+from pathlib import Path
 
-root = r"c:\Users\ImanKasni\OneDrive - Kuok (Singapore) Limited\Desktop\Work Documents\02 - Personal\07 - TT TechJam T4\techjam-conversational-search"
-os.chdir(root)
-sys.path.insert(0, root)
+root = Path(__file__).resolve().parent
+sys.path.insert(0, str(root))
 
 # Load .env (strip surrounding quotes) WITHOUT printing secrets.
-env_path = os.path.join(root, ".env")
+env_path = root / ".env"
 if os.path.exists(env_path):
     with open(env_path, encoding="utf-8") as f:
         for line in f:
@@ -32,13 +32,13 @@ from starter.agent import Agent
 from evaluator.local_evaluator import catalog_index, evaluate, load_jsonl
 
 mod.USE_LEARNED_FUSION = False
-samples = load_jsonl("data/public_set.jsonl")
-catalog_ids, categories, products = catalog_index("data/catalog.jsonl")
+samples = load_jsonl(root / "data" / "public_set.jsonl")
+catalog_ids, categories, products = catalog_index(root / "data" / "catalog.jsonl")
 t0 = time.time()
-with open("validation_llm_progress.txt", "w", encoding="utf-8") as pf:
+with open(root / "validation_llm_progress.txt", "w", encoding="utf-8") as pf:
     pf.write("building agent (TF-IDF dense, LLM enabled)...\n")
-agent = Agent("data/catalog.jsonl")
-with open("validation_llm_progress.txt", "a", encoding="utf-8") as pf:
+agent = Agent(root / "data" / "catalog.jsonl")
+with open(root / "validation_llm_progress.txt", "a", encoding="utf-8") as pf:
     pf.write(f"agent ready in {time.time()-t0:.0f}s, starting sessions...\n")
 
 _real_call = agent._call_llm_rerank
@@ -83,7 +83,7 @@ for i, sample in enumerate(samples):
             f"| hits={hits} | hr={hits / max(1, i + 1):.3f}"
         )
         print(line, flush=True)
-        with open("validation_llm_progress.txt", "w", encoding="utf-8") as pf:
+        with open(root / "validation_llm_progress.txt", "w", encoding="utf-8") as pf:
             pf.write(line + "\n")
 
 hr = hits / n
@@ -99,6 +99,6 @@ summary = {
     "avg_tokens_per_session": round((tp + tc) / n, 1),
     "seconds": round(time.time() - t0, 1),
 }
-with open("validation_llm.json", "w", encoding="utf-8") as f:
+with open(root / "validation_llm.json", "w", encoding="utf-8") as f:
     json.dump(summary, f, indent=2)
 print("VALIDATION_DONE", json.dumps(summary))

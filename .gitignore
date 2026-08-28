@@ -1,0 +1,10 @@
+# Secrets — never commit credentials
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Test / tool caches
+.pytest_cache/
