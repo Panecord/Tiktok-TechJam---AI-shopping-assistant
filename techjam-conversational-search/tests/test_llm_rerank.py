@@ -68,7 +68,7 @@ def test_valid_llm_output_is_used(monkeypatch):
     monkeypatch.setenv(LLM_KEY_ENV, "k")
     agent = FakeAgent()
 
-    def fake(candidate_list, slots, model, url, key):
+    def fake(candidate_list, slots, model, url, key, recent_turns=None):
         return (["B", "A", "C"], {"prompt_tokens": 10, "completion_tokens": 2})
 
     monkeypatch.setattr(agent, "_call_llm_rerank", fake)
@@ -83,7 +83,7 @@ def test_grounding_retry_then_valid(monkeypatch):
     agent = FakeAgent()
     calls = {"n": 0}
 
-    def fake(candidate_list, slots, model, url, key):
+    def fake(candidate_list, slots, model, url, key, recent_turns=None):
         calls["n"] += 1
         if calls["n"] == 1:
             return (["B", "X"], {"prompt_tokens": 10, "completion_tokens": 2})  # X not a candidate
@@ -102,7 +102,7 @@ def test_grounding_retry_then_fallback(monkeypatch):
     agent = FakeAgent()
     calls = {"n": 0}
 
-    def fake(candidate_list, slots, model, url, key):
+    def fake(candidate_list, slots, model, url, key, recent_turns=None):
         calls["n"] += 1
         return (["X"], {"prompt_tokens": 10, "completion_tokens": 2})  # invalid both times
 
@@ -130,7 +130,7 @@ def test_pool_trimmed_before_llm(monkeypatch):
     agent._last_max_fused = 0.30
     seen = {}
 
-    def fake(candidate_list, slots, model, url, key):
+    def fake(candidate_list, slots, model, url, key, recent_turns=None):
         seen["n"] = len(candidate_list)
         seen["first"] = candidate_list[0]
         return (candidate_list, {"prompt_tokens": 1, "completion_tokens": 1})

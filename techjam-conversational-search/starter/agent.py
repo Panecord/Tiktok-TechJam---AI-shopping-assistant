@@ -894,6 +894,7 @@ class Agent:
         model: str,
         url: str,
         key: str,
+        recent_turns: list[str] | None = None,
     ) -> tuple[list[str] | None, dict[str, int]]:
         """One listwise (RankGPT-style) rerank call. Returns (ranked_ids, usage)."""
         # Updated with AI
@@ -902,11 +903,15 @@ class Agent:
             product = self.products.get(asin, {})
             title = str(product.get("title") or asin)[:80]
             lines.append(f"{i + 1}. {asin} - {title}")
+        recent_block = ""
+        if recent_turns:
+            recent_block = "Recent shopper turns:\n- " + "\n- ".join(recent_turns) + "\n\n"
         prompt = (
             "You are an expert product-search reranker. Reorder the candidate products "
             "below by best match to the shopper's requirements, best first. Return ONLY a "
             'JSON object with a "ranked_ids" array containing the ASINs in your ranked '
             "order. Every ASIN must be one of the candidates.\n\n"
+            + recent_block +
             "Candidates:\n" + "\n".join(lines) +
             "\n\nShopper requirements: " + json.dumps(slots) +
             '\n\nReturn JSON only, e.g. {"ranked_ids": ["B...", "B..."]}'
@@ -948,6 +953,7 @@ class Agent:
         self,
         candidate_list: list[str],
         slots: dict[str, Any],
+        recent_turns: list[str] | None = None,
     ) -> tuple[list[str] | None, dict[str, int]]:
         """Grounded LLM listwise rerank on a TRIMMED candidate list.
 
@@ -965,7 +971,7 @@ class Agent:
         model = os.environ.get(LLM_MODEL_ENV, "shopping-copilot-rerank")
         candidate = set(candidate_list)
         total_usage = {"prompt_tokens": 0, "completion_tokens": 0}
-        for _attempt in range(2):  # initial call + one retry (grounding violation only)
+        for _attempt in range(2):  # initial call + one retry (grounding violation only), recent_turns
             ranked, usage = self._call_llm_rerank(candidate_list, slots, model, url, key)
             total_usage["prompt_tokens"] += usage["prompt_tokens"]
             total_usage["completion_tokens"] += usage["completion_tokens"]
@@ -983,7 +989,13 @@ class Agent:
             # Grounding violation -> retry once, then fall back.
         return None, total_usage
 
-    def _rerank(self, candidate_list: list[str], slots: dict[str, Any], use_llm: bool = True) -> tuple[list[str], dict[str, int]]:
+    def _rerank(
+        self,
+        candidate_list: list[str],
+        slots: dict[str, Any],
+        use_llm: bool = True,
+        recent_turns: list[str] | None = None,
+    ) -> tuple[list[str], dict[str, int]]:
         """Grounded reranker. Returns ids selected from `candidate_list` only.
 
         The optional LLM listwise rerank is invoked only when `use_llm` is True AND
@@ -999,7 +1011,7 @@ class Agent:
         # Shrink the pool UPSTREAM of the LLM so a single listwise call covers it
         # (no sliding window needed at ~LLM_TOP candidates).
         trimmed = deterministic[:LLM_TOP]
-        llm_ranked, usage = self._rerank_llm(trimmed, slots)
+        llm_ranked, usage = self._rerank_llm(trimmed, slots, recent_turns)
         if llm_ranked is None:
             # LLM failed -> deterministic fallback (keep token usage).
             return deterministic, usage
@@ -1019,6 +1031,7 @@ class Agent:
             "turn": 0,
             "questions_asked": [],
             "override_consumed": False,
+            "recent_turns": [],
         }
 
     def respond(
@@ -1033,6 +1046,9 @@ class Agent:
             raise RuntimeError("reset must be called before respond")
         state = self._sessions[session_id]
         state["turn"] = turn
+        state["recent_turns"].append(user_message)
+        if len(state["recent_turns"]) > 3:
+            state["recent_turns"] = state["recent_turns"][-3:]
 
         # --- Intent override handling (overwrite-on-pivot, spec §2) -----------
         new_slots = _extract_slots(user_message)
@@ -1078,7 +1094,9 @@ class Agent:
         # --- Grounded rerank (select from candidates only) ----------------------
         # Cost control: the LLM reranker runs only on the recommend branch, so a
         # session does not pay an LLM call on every clarifying turn.
-        ranked_ids, usage = self._rerank(candidates, slots, use_llm=should_recommend)
+        ranked_ids, usage = self._rerank(
+            candidates, slots, use_llm=should_recommend, recent_turns=list(state["recent_turns"])
+        )
 
         if should_recommend:
             recommendations = [{"parent_asin": asin} for asin in ranked_ids[:top_k]]
