@@ -45,9 +45,9 @@ _real_call = agent._call_llm_rerank
 llm_calls = {"n": 0}
 
 
-def _wrap(cl, slots, model, url, key):
+def _wrap(cl, slots, model, url, key, recent_turns=None):
     llm_calls["n"] += 1
-    return _real_call(cl, slots, model, url, key)
+    return _real_call(cl, slots, model, url, key, recent_turns)
 
 
 agent._call_llm_rerank = _wrap
