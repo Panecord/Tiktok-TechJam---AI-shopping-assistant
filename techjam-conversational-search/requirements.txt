@@ -1,0 +1,15 @@
+# Dependencies for TechJam Track 4 — Shopping Copilot.
+#
+# The core agent (starter/agent.py) runs on the Python 3.10+ standard library alone.
+# The packages below are only needed for optional features and development tooling:
+#   - numpy, sentence-transformers : opt-in sentence-embedding dense retrieval
+#                                    (enabled only when COPILOT_DENSE=embed is set)
+#   - scikit-learn                  : only used by _validate_fusion_cv.py (weight fitting)
+#   - pytest                        : the test suite
+#
+# A default evaluator run (`python -m evaluator.local_evaluator`) needs none of these.
+
+numpy
+sentence-transformers
+scikit-learn
+pytest
