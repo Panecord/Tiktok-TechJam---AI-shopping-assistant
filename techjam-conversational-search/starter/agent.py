@@ -205,6 +205,82 @@ LABEL_TO_SLOT = {
     "category": "category",
 }
 
+# Static synonym -> canonical tables for color/material slot matching and extraction.
+# Deterministic lookup only (spec-compliant — no learned/embedding similarity). Keys are
+# phrasings found in a 50k-product catalog audit that the fixed COLORS/MATERIALS vocab
+# misses; values are existing canonical vocab entries (no new values invented).
+_COLOR_SYNONYMS: dict[str, str] = {
+    # greens
+    "emerald": "green", "sage": "green", "olive": "green", "mint": "green",
+    "lime": "green", "army green": "green",
+    # blues / teals
+    "cerulean": "blue", "indigo": "blue", "sky blue": "blue", "aqua": "blue",
+    "cyan": "blue", "cobalt": "blue", "periwinkle": "blue",
+    "turquoise": "teal",
+    # reds
+    "crimson": "red", "scarlet": "red", "maroon": "red", "wine": "red",
+    # pinks
+    "coral": "pink", "salmon": "pink", "blush": "pink", "rose": "pink",
+    "magenta": "pink", "fuchsia": "pink", "rose gold": "pink",
+    # purples
+    "lavender": "purple", "lilac": "purple", "violet": "purple",
+    "mauve": "purple", "plum": "purple",
+    # whites / blacks / grays / browns
+    "ivory": "white", "cream": "white", "off white": "white", "off-white": "white",
+    "charcoal": "gray", "onyx": "black",
+    "rust": "brown", "taupe": "brown",
+    # oranges / yellows / metallics
+    "peach": "orange", "tangerine": "orange",
+    "mustard": "yellow",
+    "champagne": "gold", "bronze": "gold",
+}
+_MATERIAL_SYNONYMS: dict[str, str] = {
+    "elastane": "spandex", "lycra": "spandex",
+    "polyamide": "nylon", "viscose": "rayon",
+    "faux leather": "polyurethane", "leatherette": "polyurethane",
+    "pleather": "polyurethane", "pu leather": "polyurethane",
+    "faux suede": "suede", "nubuck": "suede",
+    "flannel": "cotton", "tweed": "wool",
+}
+
+
+def _build_synonym_re(table: dict[str, str]) -> re.Pattern[str]:
+    return re.compile(
+        r"\b(" + "|".join(re.escape(key) for key in sorted(table, key=len, reverse=True)) + r")\b",
+        re.I,
+    )
+
+
+def _reverse_synonyms(table: dict[str, str]) -> dict[str, tuple[str, ...]]:
+    rev: dict[str, list[str]] = {}
+    for synonym, canonical in table.items():
+        rev.setdefault(canonical, []).append(synonym)
+    return {canonical: tuple(synonyms) for canonical, synonyms in rev.items()}
+
+
+_COLOR_SYNONYM_RE = _build_synonym_re(_COLOR_SYNONYMS)
+_MATERIAL_SYNONYM_RE = _build_synonym_re(_MATERIAL_SYNONYMS)
+_COLOR_SYNONYMS_REV = _reverse_synonyms(_COLOR_SYNONYMS)
+_MATERIAL_SYNONYMS_REV = _reverse_synonyms(_MATERIAL_SYNONYMS)
+
+
+def _slot_value_in_text(value: str, text: str, attr: str) -> bool:
+    """True if `value` or one of its static synonyms appears in `text`."""
+    # Updated with AI
+    if value in text:
+        return True
+    if attr == "color":
+        table = _COLOR_SYNONYMS_REV
+    elif attr == "material":
+        table = _MATERIAL_SYNONYMS_REV
+    else:
+        table = {}
+    for synonym in table.get(value, ()):
+        if synonym in text:
+            return True
+    return False
+
+
 # The fixed allowed `ask_attribute` enum (from docs/agent_api_contract.json).
 ALLOWED_ASK_ATTRIBUTES = {
     "category", "material", "color", "size", "style", "brand",
@@ -227,7 +303,10 @@ SLOT_BOOST_WEIGHT = 0.5   # weight of the slot-match signal in the rerank score
 # replace the hand-set RRF_K / SLOT_BOOST_WEIGHT combination. Set USE_LEARNED_FUSION to
 # False to fall back to the hand-tuned path (e.g. if the learned model overfits).
 USE_LEARNED_FUSION = True
-FUSION_WEIGHTS = {"bm25": 2.6055, "dense": 11.3426, "slot": 2.0352, "price": 0.0, "bias": -4.6504}
+# Re-fitted by 5-fold, session-stratified CV (_validate_fusion_cv.py) after the v2.9.0
+# synonym + dense-query-folding changes. mean AUC 0.8054 (spread 0.057): bm25 becomes the
+# dominant relevance signal and dense is down-weighted relative to the previous fit.
+FUSION_WEIGHTS = {"bm25": 4.2429, "dense": 0.7117, "slot": 2.6878, "price": 0.0, "bias": -8.9584}
 
 K_SMALL = 25             # candidate_pool_size <= K_SMALL => consider recommending
 MARGIN_THRESHOLD = 0.20  # relative margin between top-2 fused scores => confident
@@ -299,12 +378,23 @@ def _is_full_reset(message: str) -> bool:
 
 
 def _attr_value_from_text(text: str, attr: str) -> str | None:
-    """Return the first normalised value for an attribute found in `text`."""
+    """Return the first normalised value for an attribute found in `text`.
+
+    Synonyms are checked before the base vocab so a phrase that embeds a canonical word
+    ("faux leather" -> polyurethane, not leather; "rose gold" -> pink, not gold) resolves
+    to its true canonical value.
+    """
     # Updated with AI
     if attr == "material":
+        m = _MATERIAL_SYNONYM_RE.search(text)
+        if m:
+            return _MATERIAL_SYNONYMS[m.group(1).lower()]
         m = MATERIAL_RE.search(text)
         return m.group(1).lower() if m else None
     if attr == "color":
+        m = _COLOR_SYNONYM_RE.search(text)
+        if m:
+            return _COLOR_SYNONYMS[m.group(1).lower()]
         m = COLOR_RE.search(text)
         return m.group(1).lower() if m else None
     if attr == "size":
@@ -637,14 +727,28 @@ class Agent:
 
     # -- BM25 query ----------------------------------------------------------
     def _bm25_query(self, message: str, slots: dict[str, Any]) -> str:
-        """Build an FTS expression from the message plus slot constraints."""
+        """Build a de-duplicated FTS expression from the message plus slot constraints.
+
+        The message and slot-value terms are merged with a dedup pass so a slot value
+        that already appears in the message (e.g. the category) is not emitted twice in
+        the OR expression. Duplicate OR terms are no-ops for FTS5, so this only cleans
+        the query (and slightly reduces the token count passed to the index).
+        """
         # Updated with AI
-        terms = list(dict.fromkeys(_terms(message)))
+        seen: set[str] = set()
+        terms: list[str] = []
+        for token in _terms(message):
+            if token not in seen:
+                seen.add(token)
+                terms.append(token)
         # Add slot values to broaden recall where they are meaningful.
         for attr in ("material", "color", "size", "style", "use_case", "category"):
             value = slots.get(attr)
             if value:
-                terms.extend(t for t in _terms(str(value)) if t not in STOPWORDS)
+                for token in _terms(str(value)):
+                    if token not in seen:
+                        seen.add(token)
+                        terms.append(token)
         return " OR ".join(f'"{term}"' for term in terms[:40])
 
     def _dense_query(self, message: str, slots: dict[str, Any]) -> str:
@@ -687,7 +791,7 @@ class Agent:
             if not value:
                 continue
             total += 1.0
-            if isinstance(value, str) and value.lower() in text:
+            if isinstance(value, str) and _slot_value_in_text(value.lower(), text, attr):
                 matched += 1.0
         category = slots.get("category")
         if category:

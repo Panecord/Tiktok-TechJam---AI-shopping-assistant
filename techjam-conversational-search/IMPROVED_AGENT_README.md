@@ -1,7 +1,36 @@
-# Improved Agent — Track 4 Shopping Copilot (v2.7.0)
+# Improved Agent — Track 4 Shopping Copilot (v2.9.0)
 
 > **Updated with AI.** This document describes the upgraded `starter/agent.py` that
 > replaces the weak, stateless BM25 baseline (v1.0.0) shipped with the challenge.
+>
+> **v2.9.0 (Iteration 6, Tasks 3 / 7 / 8 / 9 / 11 / 12):** the strongest single-iteration
+> gain so far. (a) **Static synonym-aware color/material matching** — the slot
+> vocabularies only cover canonical words, so common catalog phrasings ("emerald",
+> "wine", "elastane", "faux leather", …) were previously missed. Added `_COLOR_SYNONYMS` /
+> `_MATERIAL_SYNONYMS`: extraction now checks synonyms *before* the base vocab (so
+> "faux leather" → polyurethane, not leather; "rose gold" → pink, not gold), and
+> `_slot_match_score` resolves a canonical value against a product that uses a synonym.
+> (b) **Re-fitted learned fusion weights** via 5-fold, session-stratified CV
+> (mean AUC `0.8054`, spread `0.057`): `bm25` becomes the dominant relevance signal
+> (`2.61 → 4.24`) and `dense` is down-weighted (`11.34 → 0.71`), which lifted HR@10
+> `0.650 → 0.715`, MRR `0.4787 → 0.4938`, MTTC `6.470 → 5.805`, score `0.5592 → 0.6095`.
+> (c) **`_bm25_query` de-duplication** so a slot value already in the message is not
+> emitted twice in the FTS expression. (d) **`public_0190` resolved** — the last
+> dedicated residual miss now hits after the re-fit, and was promoted to a recovered
+> regression case. (e) **Isolated unit tests** for the ask-vs-recommend policy,
+> `_choose_ask_attribute`, `_bm25_query`, and synonym matching. (f) **Parallelized
+> `_validate_llm.py`** (ThreadPoolExecutor, per-worker Agent, session slices) — code only.
+> (g) **Pool-recall re-check**: pool recall `0.965` vs HR@10 `0.715` → the bottleneck is
+> **ranking/selection, not retrieval**, so sentence-embedding retrieval (Task 12.2) was
+> investigated and deferred (limited upside, heavy `torch` dependency).
+>
+> **v2.8.0 (Iteration 5):** **ask-attribute reachability** — `_choose_ask_attribute` now
+> skips `budget` and `category` (the simulator's constraint classifier never labels a
+> disclosure `budget` or `category`, so asking is a guaranteed dead end) and registers
+> non-recognized materials (denim, linen, jewelry metals, …) under `feature` so the
+> entropy-based selector can actually reach them (`EVALUATOR_RECOGNIZED_MATERIALS`). The
+> LLM rerank prompt also gained `recent_turns` (last 3 user turns), matching the spec's
+> rerank request shape.
 >
 > **v2.7.0 (Iteration 4):** expanded the slot vocabularies — `CATEGORY_TOKENS` gained the
 > plural forms and data-driven product types found in the public-set audit (tees, bras,
@@ -84,8 +113,10 @@
 | `v2.6.0` | **Per-slot pivot handling + diagnostics.** (a) A pivot now clears only the slot(s) the new message targets (full reset only via "forget all that"). (b) `_retrieve()` exposes the fused pool for a **pool-recall** diagnostic. (c) Session-level 5-fold CV for the learned fusion. (d) Clarifying-question quality diagnostic (entropy vs random). | Full-set **pool recall `0.960` vs HR@10 `0.545`** -> bottleneck is ranking, not retrieval. Full-set: HR@10 `0.545`, MRR `0.422623`, MTTC `8.255`, score `0.454187`. Intent-override HR `0.5333` (no regression). |
 | `v2.6.1` | Dense retrieval now folds the accumulated slot values into its query (via `_dense_query`, token-de-duplicated) instead of scoring the raw message only — the dominant learned-fusion (dense) signal was previously blind to earlier-turn constraints. | HR@10 `0.545 -> 0.575`, MRR `0.4226 -> 0.4310`, MTTC `8.255 -> 8.20`, score `0.4542 -> 0.4728` |
 | `v2.7.0` | **Slot-vocabulary expansion + performance.** (a) `CATEGORY_TOKENS` extended with plural forms and data-driven additions from the public-set audit (tees, bras, socks, jeans, slippers, loafers, …). (b) `MATERIALS` extended with jewelry/accessory materials, plus explicit `"Label: value"` constraint parsing. (c) Perf: cached lowercased searchable text (`_searchable_lc`) and a posting-list inverted index for dense scoring (~4x faster per turn). (d) Null-price budget behavior made an explicit, documented deterministic choice. | HR@10 `0.575 -> 0.630`, MRR `0.4310 -> 0.4556`, MTTC `8.20 -> 7.555`, score `0.4728 -> 0.5206` |
+| `v2.8.0` | **Ask-attribute reachability + LLM context.** `_choose_ask_attribute` now skips `budget` and `category` (guaranteed dead-end asks: the simulator never discloses a constraint classed `budget`/`category`), and registers non-recognized materials (denim, linen, jewelry metals, …) under `feature` via `EVALUATOR_RECOGNIZED_MATERIALS` so the entropy selector can reach them. `recent_turns` (last 3 user turns) added to the LLM rerank prompt per spec §2. | HR@10 `0.630 -> 0.650`, MRR `0.4556 -> 0.4787`, MTTC `7.555 -> 6.470`, score `0.5206 -> 0.5592` |
+| `v2.9.0` | **Synonym-aware matching + re-fitted fusion weights + test coverage.** (a) Static `_COLOR_SYNONYMS` / `_MATERIAL_SYNONYMS` checked before base vocab (extraction + slot-match). (b) Learned fusion weights re-fitted by 5-fold session CV (mean AUC `0.8054`): bm25 `2.61 -> 4.24`, dense `11.34 -> 0.71`. (c) `_bm25_query` de-duplication. (d) `public_0190` residual resolved. (e) Isolated unit tests for policy / `_choose_ask_attribute` / `_bm25_query` / synonyms. (f) `_validate_llm.py` parallelized (code only). (g) Pool-recall re-check: `0.965` vs HR@10 `0.715` (ranking bottleneck). | HR@10 `0.650 -> 0.715`, MRR `0.4787 -> 0.4938`, MTTC `6.470 -> 5.805`, Efficiency `0.453 -> 0.5195`, score `0.5592 -> 0.6095` |
 
-> The next improvement will be `v2.8.0`.
+> The next improvement will be `v2.10.0`.
 
 ## 1. Summary of What Changed
 
@@ -129,22 +160,22 @@ user turn
 Measured on the **200-session public dev set** via `python -m evaluator.local_evaluator`
 (the evaluator and public labels are untouched).
 
-| Metric | Baseline (BM25) | Upgraded (v2.0.0) | Upgraded (v2.1.0) | Upgraded (v2.6.0) | Upgraded (v2.7.0) |
-|--------|-----------------|-------------------|-------------------|-------------------|-------------------|
-| Hit Rate@10 | `0.125` | `0.225` | `0.515` | `0.545` | **`0.630`** |
-| MRR | `0.068034` | `0.068581` | `0.349196` | `0.422623` | **`0.455567`** |
-| MTTC | `9.81` | `9.30` | `8.21` | `8.255` | **`7.555`** |
-| Efficiency | `0.119` | `0.17` | `0.279` | `0.2745` | **`0.3445`** |
-| **Technical Score** | `0.10671` | `0.167074` | `0.418059` | `0.454187` | **`0.520570`** |
+| Metric | Baseline (BM25) | Upgraded (v2.0.0) | Upgraded (v2.1.0) | Upgraded (v2.6.0) | Upgraded (v2.7.0) | Upgraded (v2.8.0) | Upgraded (v2.9.0) |
+|--------|-----------------|-------------------|-------------------|-------------------|-------------------|-------------------|-------------------|
+| Hit Rate@10 | `0.125` | `0.225` | `0.515` | `0.545` | `0.630` | `0.650` | **`0.715`** |
+| MRR | `0.068034` | `0.068581` | `0.349196` | `0.422623` | `0.455567` | `0.478685` | **`0.493812`** |
+| MTTC | `9.81` | `9.30` | `8.21` | `8.255` | `7.555` | `6.470` | **`5.805`** |
+| Efficiency | `0.119` | `0.17` | `0.279` | `0.2745` | `0.3445` | `0.453` | **`0.5195`** |
+| **Technical Score** | `0.10671` | `0.167074` | `0.418059` | `0.454187` | `0.520570` | `0.559206` | **`0.609544`** |
 
 Scenario breakdown (from `results.json`):
 
-| Scenario | Baseline HR@10 | Upgraded (v2.0.0) | Upgraded (v2.1.0) | Upgraded (v2.6.0) | Upgraded (v2.7.0) |
-|----------|----------------|-------------------|-------------------|-------------------|-------------------|
-| buying | `0.2375` | `0.225` | `0.5` | `0.5` | `0.6375` |
-| browsing | `0.025` | `0.2625` | `0.525` | `0.5625` | `0.6125` |
-| intent_override | `0.1333` | `0.1667` | `0.4667` | `0.5333` | `0.6` |
-| boundary | `0.0` | `0.1` | `0.7` | `0.8` | `0.8` |
+| Scenario | Baseline HR@10 | Upgraded (v2.0.0) | Upgraded (v2.1.0) | Upgraded (v2.6.0) | Upgraded (v2.7.0) | Upgraded (v2.8.0) | Upgraded (v2.9.0) |
+|----------|----------------|-------------------|-------------------|-------------------|-------------------|-------------------|-------------------|
+| buying | `0.2375` | `0.225` | `0.5` | `0.5` | `0.6375` | `0.625` | **`0.7375`** |
+| browsing | `0.025` | `0.2625` | `0.525` | `0.5625` | `0.6125` | `0.6625` | **`0.7125`** |
+| intent_override | `0.1333` | `0.1667` | `0.4667` | `0.5333` | `0.6` | `0.6` | **`0.6`** |
+| boundary | `0.0` | `0.1` | `0.7` | `0.8` | `0.8` | `0.9` | **`0.9`** |
 
 The largest gains come from the **browsing** and **intent_override** scenarios, which were
 near-zero for the baseline because it never asked questions and never handled pivots.
@@ -353,7 +384,10 @@ python -m evaluator.local_evaluator
 - Budget matching deliberately gives no budget credit to null-price products (treated as
   out-of-budget); ~79% of the catalog has no price, so only verifiably in-budget products
   earn the budget signal.
-- The deterministic reranker uses lexical attribute matching, so subtle synonyms may be missed.
+- The deterministic reranker uses lexical attribute matching. v2.9.0 added a static
+  color/material synonym table (`_COLOR_SYNONYMS`, `_MATERIAL_SYNONYMS`), so common
+  phrasings like "emerald", "wine", "elastane", "faux leather" resolve to their canonical
+  value; synonyms outside that table (and non color/material attributes) may still be missed.
 - `usage` is `0` unless an LLM is configured; enabling the LLM requires a compatible
   chat-completion endpoint and does not improve the core metric unless it reorders candidates
   more accurately than the deterministic reranker.
