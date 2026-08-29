@@ -122,6 +122,13 @@ MATERIALS = (
     "plastic", "acrylic", "wood", "rubber", "suede",
     "canvas", "mesh", "velvet", "satin", "chiffon", "polyurethane",
 )
+
+# Updated with AI: the subset of MATERIALS the simulator's own classifier (a separate,
+# narrower 9-word list) recognizes as "material". Anything outside this set gets
+# classified as "feature" by the simulator instead -- see _attribute_values_for_product.
+EVALUATOR_RECOGNIZED_MATERIALS = frozenset({
+    "cotton", "polyester", "nylon", "leather", "wool", "spandex", "silk", "rayon", "fabric",
+})
 COLORS = (
     "black", "white", "blue", "red", "pink", "green", "brown", "gray", "grey",
     "purple", "yellow", "orange", "navy", "beige", "tan", "gold", "silver",
@@ -372,6 +379,17 @@ def _attribute_values_for_product(product: dict, text: str | None = None) -> dic
         val = _attr_value_from_text(text, attr)
         if val:
             values[attr] = val
+            # Updated with AI: the simulator's own constraint classifier recognizes only
+            # a narrow 9-word material list (cotton/polyester/nylon/leather/wool/spandex/
+            # silk/rayon/fabric) as "material" -- everything else (denim, linen, fleece,
+            # lace, and every jewelry material: alloy, gold, silver, gemstone, ...) gets
+            # classified as "feature" instead and can ONLY ever be revealed by asking
+            # about "feature". Register it there too so _choose_ask_attribute can
+            # actually reach it (previously impossible: "feature" was never populated
+            # here at all, so its entropy was always undefined and it could never be
+            # selected -- confirmed 0/1138 asks were ever "feature").
+            if attr == "material" and val not in EVALUATOR_RECOGNIZED_MATERIALS:
+                values["feature"] = val
     categories = product.get("categories") or []
     if categories:
         vals = [str(c).strip() for c in categories if c]
@@ -818,6 +836,21 @@ class Agent:
         best_entropy = -1.0
         for attr in ATTRIBUTE_PRIORITY:
             if attr in question_history:
+                continue
+            # Updated with AI: budget/price is near-continuous (almost every product has
+            # a distinct price), so its entropy is artificially high without being a
+            # genuinely informative question -- 168/168 budget asks in the public set
+            # got a non-informative "no preference" reply. Still captured automatically
+            # via BUDGET_RE if the customer mentions it unprompted; only excluded from
+            # being actively asked.
+            if attr == "budget":
+                continue
+            # Updated with AI: "category" can never be answered informatively either --
+            # the simulator's own constraint classifier (evaluator.classify_constraint)
+            # only ever labels a disclosed constraint as budget/material/color/size/
+            # style/use_case/feature, never "category". Asking is a guaranteed dead end
+            # by construction (confirmed: 162/162 category asks got a non-answer).
+            if attr == "category":
                 continue
             value_counts = per_attr_values.get(attr)
             if not value_counts or len(value_counts) < 2:
