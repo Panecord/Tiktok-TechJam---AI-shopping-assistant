@@ -12,7 +12,7 @@ that still require a human-provided link or name.
 | Multi-route retrieval and semantic ranking | In-memory SQLite FTS5 BM25 and TF-IDF cosine retrieval feed reciprocal-rank fusion and a learned deterministic reranker. Sentence embeddings and a grounded listwise LLM are opt-in. | Implemented |
 | Dynamic state and intent override | Per-session slots, durable free-text evidence, recent turns, shown products, question history, per-slot overwrite, and explicit full reset live in `starter/agent.py`. | Implemented |
 | Proactive clarification | The deterministic ask/recommend policy asks answerability-aware, non-repeating attribute questions when confidence is low, then forces convergence within the turn budget. | Implemented |
-| Dynamic context programming | Long-term anonymized profile terms and short-term session constraints are stored separately, distilled into a bounded context, and re-orchestrated on every turn. | Implemented |
+| Dynamic context programming | Long-term anonymized profile terms and short-term session constraints are stored separately, distilled into a bounded context, and re-orchestrated on every turn. A bounded prior candidate beam is re-scored when long evidence causes retrieval drift. | Implemented |
 
 ## Constraints and evaluation
 
@@ -40,14 +40,14 @@ that still require a human-provided link or name.
 
 ## Validated public result
 
-The deterministic v2.8.1 run on all 200 released development sessions produces:
+The deterministic v2.9.0 run on all 200 released development sessions produces:
 
-- Hit Rate@10: `0.995` (199/200)
-- MRR: `0.574935`
-- MTTC: `2.74`
-- Efficiency: `0.826`
-- Technical Score: `0.835180`
+- Hit Rate@10: `1.0` (200/200)
+- MRR: `0.572823`
+- MTTC: `2.71`
+- Efficiency: `0.829`
+- Technical Score: `0.837647`
 - Reported model tokens and API cost: `0`
 
-Browsing, boundary, and intent-override Hit Rate@10 are `1.0`; Buying is `0.9875`.
+Buying, Browsing, boundary, and intent-override Hit Rate@10 are all `1.0`.
 These public development results do not guarantee private-set performance.

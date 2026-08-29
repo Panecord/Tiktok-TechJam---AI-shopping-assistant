@@ -1,7 +1,14 @@
-# Improved Agent — Track 4 Shopping Copilot (v2.8.1)
+# Improved Agent — Track 4 Shopping Copilot (v2.9.0)
 
 > **Updated with AI.** This document describes the upgraded `starter/agent.py` that
 > replaces the weak, stateless BM25 baseline (v1.0.0) shipped with the challenge.
+>
+> **v2.9.0 (candidate-memory route):** preserves a bounded earlier retrieval beam and
+> re-scores it when long catalog-specific evidence would otherwise cause query drift.
+> Live and memory rankings are interleaved, already-shown products remain suppressed, and
+> pivot/full-reset operations clear the memory. This closes the final public miss without
+> using sample IDs or labels: **Hit Rate@10 `1.0` (200/200)**, MRR `0.572823`, MTTC `2.71`,
+> and Technical Score **`0.837647`**, with zero model tokens.
 >
 > **v2.8.1 (Track 4 compliance pass):** makes the Buying and Browsing routes
 > operationally distinct, correctly treats “still exploring” as Browsing even when a
@@ -103,8 +110,9 @@
 | `v2.7.0` | **Slot-vocabulary expansion + performance.** (a) `CATEGORY_TOKENS` extended with plural forms and data-driven additions from the public-set audit (tees, bras, socks, jeans, slippers, loafers, …). (b) `MATERIALS` extended with jewelry/accessory materials, plus explicit `"Label: value"` constraint parsing. (c) Perf: cached lowercased searchable text (`_searchable_lc`) and a posting-list inverted index for dense scoring (~4x faster per turn). (d) Null-price budget behavior made an explicit, documented deterministic choice. | HR@10 `0.575 -> 0.630`, MRR `0.4310 -> 0.4556`, MTTC `8.20 -> 7.555`, score `0.4728 -> 0.5206` |
 | `v2.8.0` | Durable free-text constraints, non-repeating multi-turn slates, answerability-aware questions, override-safe evidence, vocabulary-independent categories, exact evidence coverage, scoped reply updates, LLM history forwarding, and corrected five-fold fusion weights. | HR@10 `0.650 -> 0.995`, MRR `0.478685 -> 0.573546`, MTTC `6.47 -> 2.745`, score `0.559206 -> 0.834664`; boundary/browsing/intent-override HR `1.0`, buying HR `0.9875` |
 | `v2.8.1` | Official Track 4 compliance pass: distinct precision/discovery route weights, correct exploration routing and state-driven route transitions, bounded profile-context distillation, and richer grounded optional-LLM candidate cards. Added an interactive demo and submission/compliance documents. | HR@10 `0.995`; MRR `0.574935`; MTTC `2.74`; score `0.835180`; browsing/boundary/intent-override HR `1.0`, buying HR `0.9875` |
+| `v2.9.0` | Added bounded session candidate memory. Long catalog-specific evidence activates a separately re-scored historical beam, interleaved with live retrieval; intent pivots clear it. | HR@10 `0.995 -> 1.0` (200/200); MRR `0.572823`; MTTC `2.71`; score `0.837647`; every scenario HR `1.0` |
 
-> The next improvement will be `v2.9.0`.
+> The next improvement will be `v2.10.0`.
 
 ## 1. Summary of What Changed
 
@@ -124,6 +132,7 @@ user turn
   -> hybrid retrieval (BM25 + TF-IDF or opt-in sentence embeddings)
   -> candidate fusion (RRF pool + five-fold learned scoring)
   -> grounded rerank (slot + exact-evidence coverage; optional LLM)
+  -> long-evidence candidate-memory route (bounded prior beam + live interleave)
   -> ask-vs-recommend policy (deterministic threshold rule)
   -> unseen-product slate selection (avoid wasting later turns on repeats)
   -> turn-budget guard (force convergence by turn 9)
@@ -131,7 +140,7 @@ user turn
 
 ### High-level feature additions
 
-| # | Feature | Baseline (v1.0.0) | Current (v2.8.1) |
+| # | Feature | Baseline (v1.0.0) | Current (v2.9.0) |
 |---|---------|-------------------|-------------------|
 | 1 | Hybrid retrieval | BM25 only | BM25 + in-memory dense TF-IDF |
 | 2 | Candidate fusion | none (raw BM25 order) | RRF recall pool + session-level five-fold weights |
@@ -145,27 +154,28 @@ user turn
 | 10 | Optional LLM rerank | none | optional, env-var gated, validated |
 | 11 | Honest token reporting | 0/0 | 0/0 when no LLM (real counts when used) |
 | 12 | Cumulative slate coverage | repeats the same top results | prioritizes high-ranked unseen products each turn |
+| 13 | Candidate memory | none | bounded historical beam re-scored after long-evidence query drift |
 
 ## 2. Metrics — Baseline vs. Upgraded
 
 Measured on the **200-session public dev set** via `python -m evaluator.local_evaluator`
 (the evaluator and public labels are untouched).
 
-| Metric | Baseline (BM25) | v2.1.0 | v2.6.0 | v2.7.0 | Current v2.8.1 |
+| Metric | Baseline (BM25) | v2.1.0 | v2.6.0 | v2.7.0 | Current v2.9.0 |
 |--------|-----------------|--------|--------|--------|----------------|
-| Hit Rate@10 | `0.125` | `0.515` | `0.545` | `0.630` | **`0.995`** |
-| Successful sessions | `25/200` | `103/200` | `109/200` | `126/200` | **`199/200`** |
-| MRR | `0.068034` | `0.349196` | `0.422623` | `0.455567` | **`0.574935`** |
-| MTTC | `9.81` | `8.21` | `8.255` | `7.555` | **`2.74`** |
-| Efficiency | `0.119` | `0.279` | `0.2745` | `0.3445` | **`0.826`** |
-| **Technical Score** | `0.10671` | `0.418059` | `0.454187` | `0.520570` | **`0.835180`** |
+| Hit Rate@10 | `0.125` | `0.515` | `0.545` | `0.630` | **`1.0`** |
+| Successful sessions | `25/200` | `103/200` | `109/200` | `126/200` | **`200/200`** |
+| MRR | `0.068034` | `0.349196` | `0.422623` | `0.455567` | **`0.572823`** |
+| MTTC | `9.81` | `8.21` | `8.255` | `7.555` | **`2.71`** |
+| Efficiency | `0.119` | `0.279` | `0.2745` | `0.3445` | **`0.829`** |
+| **Technical Score** | `0.10671` | `0.418059` | `0.454187` | `0.520570` | **`0.837647`** |
 
 Scenario breakdown (from `results.json`):
 
-| Scenario | Samples | Baseline HR@10 | v2.7.0 | Current v2.8.1 | Current MRR | Current MTTC |
+| Scenario | Samples | Baseline HR@10 | v2.7.0 | Current v2.9.0 | Current MRR | Current MTTC |
 |----------|---------|----------------|--------|----------------|-------------|--------------|
-| buying | `80` | `0.2375` | `0.6375` | **`0.9875`** | `0.539281` | `2.20` |
-| browsing | `80` | `0.025` | `0.6125` | **`1.0`** | `0.552088` | `2.5375` |
+| buying | `80` | `0.2375` | `0.6375` | **`1.0`** | `0.541295` | `2.0875` |
+| browsing | `80` | `0.025` | `0.6125` | **`1.0`** | `0.544797` | `2.575` |
 | intent_override | `30` | `0.1333` | `0.6` | **`1.0`** | `0.660913` | `4.266667` |
 | boundary | `10` | `0.0` | `0.8` | **`1.0`** | `0.785` | `4.10` |
 
@@ -227,6 +237,8 @@ Each session (keyed by `session_id`) carries persistent state in `self._sessions
     "user_profile": {...},          # anonymized soft preference metadata
     "profile_terms": [...],         # allow-listed long-term preference context
     "distilled_context": "...",    # bounded profile + current session terms
+    "candidate_memory": [...],      # bounded earlier retrieval beam
+    "candidate_memory_features": {},# strongest prior lexical/dense signals
 }
 ```
 
@@ -246,6 +258,9 @@ Each session (keyed by `session_id`) carries persistent state in `self._sessions
   retrieval terms; review-rating metadata and free-form profile summaries are not treated as
   product requirements. Current slots/evidence are merged separately into a 32-term runtime
   context on each turn.
+- **Candidate memory:** up to 900 earlier grounded candidates and their strongest lexical/
+  dense features are retained. A pivot or full reset clears this route along with exposure
+  state so old-intent products cannot leak into the new search.
 
 ### 3.4 Hybrid retrieval + fusion (§3)
 
@@ -263,6 +278,13 @@ Each session (keyed by `session_id`) carries persistent state in `self._sessions
    the session-level five-fold mean logistic-regression coefficients.
 6. Exact phrase/token coverage of durable free-text evidence is added at rerank time.
 7. The result is capped to a bounded pool (default `FUSED_POOL = 300`).
+
+When a newly disclosed catalog-specific constraint is at least 40 characters, the agent
+also re-scores candidates that were plausible earlier but fell out of the live pool. Live
+and memory rankings are interleaved before unseen-slate selection. This addresses a common
+retrieval failure in which copied manufacturing boilerplate makes a later query less useful
+than the earlier category query; every memory candidate still originated in grounded catalog
+retrieval.
 
 Every ASIN in the returned pool is validated against `self.products` (grounding guarantee).
 
@@ -402,7 +424,7 @@ python -m pytest -q
 python demo.py --profile-tags comfort,fit,durability
 ```
 
-The checked-in `results.json` contains the v2.8.1 deterministic public-set run. `pytest`
+The checked-in `results.json` contains the v2.9.0 deterministic public-set run. `pytest`
 is a development dependency; the evaluator itself needs only Python 3.10+ standard library.
 The compliance matrix, Devpost draft, and recording outline are in
 `docs/TRACK4_COMPLIANCE.md`, `docs/devpost_project_description.md`, and
@@ -411,7 +433,8 @@ The compliance matrix, Devpost draft, and recording outline are in
 ## 8. Per-Scenario Behaviour Notes
 
 - **Buying** — concrete requirements are accumulated, used in both retrieval channels, and
-  reranked with exact evidence coverage.
+  reranked with exact evidence coverage. Long evidence may also activate the bounded memory
+  route to prevent the earlier precision beam from being lost to query drift.
 - **Browsing** — answerable clarification questions reveal constraints while unseen slates
   progressively explore the grounded pool.
 - **Intent Override** — only replaced slots/initial preference evidence are invalidated;
@@ -421,9 +444,11 @@ The compliance matrix, Devpost draft, and recording outline are in
 
 ## 9. Limitations / Known Behaviours
 
-- The public result is `199/200`, not a guaranteed private-set result. The remaining public
-  miss is an underdetermined group in which hundreds of catalog products share the same
-  disclosed category and feature template; hard-coding its label would be invalid overfit.
+- The public result is `200/200`, but this is a development-set measurement rather than a
+  guarantee of private-set performance. Some novelty products remain information-theoretically
+  indistinguishable from the disclosed constraints; candidate memory improves bounded
+  exploration but cannot guarantee arbitrary hidden targets in groups larger than the total
+  recommendation budget.
 - Budget matching deliberately gives no budget credit to null-price products (treated as
   out-of-budget); ~79% of the catalog has no price, so only verifiably in-budget products
   earn the budget signal.

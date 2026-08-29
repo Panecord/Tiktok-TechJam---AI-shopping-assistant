@@ -23,8 +23,9 @@ Both combine lexical BM25 and in-memory semantic retrieval. Reciprocal-rank fusi
 bounded candidate pool; a learned deterministic scorer then combines retrieval, slot,
 price, and exact evidence-coverage signals. A confidence policy decides whether to ask a
 question or recommend, and unseen-product slate rotation increases recall over multiple
-turns. Intent overrides rewrite the affected state without discarding unrelated confirmed
-preferences.
+turns. When a later boilerplate-heavy query drifts, a bounded candidate-memory route
+re-scores the earlier beam with current evidence. Intent overrides rewrite the affected
+state without discarding unrelated confirmed preferences.
 
 ## How we built it
 
@@ -46,34 +47,34 @@ works when network access and credentials are unavailable.
 
 On the untouched 200-session public set:
 
-- Hit Rate@10: 0.995 (199/200)
-- MRR: 0.574935
-- MTTC: 2.74 turns
-- Efficiency: 0.826
-- Recommended Technical Score: 0.835180
+- Hit Rate@10: 1.0 (200/200)
+- MRR: 0.572823
+- MTTC: 2.71 turns
+- Efficiency: 0.829
+- Recommended Technical Score: 0.837647
 - Model tokens: 0
 - Estimated API cost: $0 for the validated run
 
-The three scenario groups Browsing, Intent Override, and Boundary reach 100% public Hit
-Rate@10; Buying reaches 98.75%. Public-set results are development measurements and may
-differ on the 800-session private set.
+Buying, Browsing, Intent Override, and Boundary all reach 100% public Hit Rate@10.
+Public-set results are development measurements and may differ on the 800-session private
+set.
 
 ## Challenges and accomplishments
 
 The main challenge was not just first-turn retrieval—it was preserving useful evidence
 across ten turns without repeating the same products or allowing a pivot to erase unrelated
-constraints. Durable free-text evidence, scoped slot updates, route-aware fusion, and novel
-slates improved public Hit Rate@10 from 0.65 to 0.995 while keeping the system offline and
-grounded. Every returned ASIN is validated against the frozen catalog.
+constraints. Durable free-text evidence, scoped slot updates, route-aware fusion, candidate
+memory, and novel slates improved public Hit Rate@10 from 0.65 to 1.0 while keeping the
+system offline and grounded. Every returned ASIN is validated against the frozen catalog.
 
 ## Limitations
 
-The remaining public miss is an underdetermined novelty-shirt case where hundreds of items
-share the disclosed generic manufacturing text and the conversation never reveals a title,
-saying, brand, or other unique identifier. Adding a public sample-to-target lookup would be
-label leakage, so it is intentionally excluded. The default TF-IDF channel is lexical rather
-than a neural embedding model, prices are missing for many catalog rows, and optional model
-quality/cost depends on the external endpoint selected by the team.
+Some novelty-shirt groups contain hundreds of products with the same disclosed manufacturing
+text and no revealed title, saying, brand, or other unique identifier. Candidate memory
+recovers the released cases but cannot create information that was never disclosed, so a
+perfect public score is not a private-set guarantee. The default TF-IDF channel is lexical,
+prices are missing for many catalog rows, and optional model quality/cost depends on the
+external endpoint selected by the team.
 
 ## Reproduction
 
