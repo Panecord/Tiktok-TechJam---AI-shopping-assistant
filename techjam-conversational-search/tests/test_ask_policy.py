@@ -42,7 +42,7 @@ class _PolicyAgent(Agent):
         self._candidates: list[str] = []
         self._scores: list[float] = []
 
-    def _retrieve(self, message, top_k, slots):
+    def _retrieve(self, message, top_k, slots, context="", intent="buying", profile_context=""):
         return self._candidates
 
     def _top_scores(self, candidate_list, slots):
@@ -51,7 +51,7 @@ class _PolicyAgent(Agent):
     def _rerank(self, candidate_list, slots, use_llm=True, recent_turns=None):
         return candidate_list[:10], {"prompt_tokens": 0, "completion_tokens": 0}
 
-    def _choose_ask_attribute(self, candidate_list, question_history):
+    def _choose_ask_attribute(self, candidate_list, question_history, profile_tags=None):
         return "color"
 
 
@@ -148,7 +148,8 @@ def test_choose_skips_already_asked():
     searchable = {k: v["title"].lower() for k, v in products.items()}
     agent = _ChooseAgent(products, searchable)
     # material is the only informative attr; asking material again must be skipped.
-    assert _choose(agent, list(products), ["material"]) == "other"
+    # ANSWERABILITY_PRIORITY then lands on "feature" (an always-eligible question).
+    assert _choose(agent, list(products), ["material"]) == "feature"
 
 
 def test_choose_empty_candidate_returns_other():
@@ -163,7 +164,9 @@ def test_choose_uniform_pool_returns_other():
     }
     searchable = {k: v["title"].lower() for k, v in products.items()}
     agent = _ChooseAgent(products, searchable)
-    assert _choose(agent, list(products), []) == "other"
+    # No attribute splits the uniform pool, but "feature" is always an eligible
+    # high-value question under ANSWERABILITY_PRIORITY.
+    assert _choose(agent, list(products), []) == "feature"
 
 
 # -- _bm25_query -------------------------------------------------------------------

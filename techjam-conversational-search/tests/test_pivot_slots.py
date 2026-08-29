@@ -104,14 +104,15 @@ def test_single_attr_pivot_preserves_other_slots(loaded):
     state = agent._sessions["pivot_test"]
     assert state["slots"].get("material") == "cotton"
     assert state["slots"].get("color") == "blue"
-    assert state["slots"].get("category") == "shirt"
+    # The coarse-category capture preserves the full shopper phrase (not just "shirt").
+    assert state["slots"].get("category") == "cotton shirt blue"
 
     # A targeted pivot on color must NOT wipe material/category.
     agent.respond("pivot_test", "Actually, I want red instead.", 2, TOP_K)
     state = agent._sessions["pivot_test"]
     assert state["slots"].get("color") == "red", "pivot did not overwrite the color slot"
     assert state["slots"].get("material") == "cotton", "pivot cleared the material slot"
-    assert state["slots"].get("category") == "shirt", "pivot cleared the category slot"
+    assert state["slots"].get("category") == "cotton shirt blue", "pivot cleared the category slot"
 
 
 def test_full_reset_clears_all_slots(loaded):
