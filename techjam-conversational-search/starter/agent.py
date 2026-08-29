@@ -314,13 +314,13 @@ USE_LEARNED_FUSION = True
 # committed vector (dense=11.34) came from an older feature pipeline and severely
 # over-weighted sparse TF-IDF similarity after later retrieval changes.
 FUSION_WEIGHTS = {
-    "bm25": 4.2429,
-    "dense": 0.7117,
-    "slot": 2.6878,
+    "bm25": 2.5,
+    "dense": 1.8,
+    "slot": 3.2,
     "price": 0.0,
-    "bias": -8.9584,
+    "bias": -3.5,
 }
-EVIDENCE_BOOST_WEIGHT = 3.0
+EVIDENCE_BOOST_WEIGHT = 5.0
 
 # Track 4 requires distinct Buying and Browsing routes.  Both remain hybrid for recall,
 # but Buying emphasizes lexical/constraint precision while Browsing emphasizes semantic
@@ -1098,12 +1098,22 @@ class Agent:
             matched_set = set(matched)
             unmatched = [asin for asin in pool if asin not in matched_set]
             pool = matched + unmatched
+            # Updated with AI: the ask/recommend confidence gate needs the count of
+            # candidates that actually satisfy the KNOWN constraints, not the size of
+            # the recall-safe backfilled pool (which stays near FUSED_POOL regardless
+            # of how many slots are known and therefore never triggers K_SMALL).
+            self._last_matched_count = len(matched)
+        else:
+            self._last_matched_count = len(pool)
 
         # Store features for the pool: rank-based BM25 + cosine dense + slot + price.
         bm25_pos = {asin: i for i, asin in enumerate(bm25_ranked)}
         features: dict[str, list[float]] = {}
         for asin in pool:
-            b_norm = 1.0 / (1.0 + bm25_pos.get(asin, len(bm25_ranked)))
+            # Updated with AI: log-compress the rank (not the raw 1/(1+rank) reciprocal)
+            # so the feature still favors better BM25 matches but doesn't let a rank-30
+            # vs rank-1 difference swamp the slot/evidence signal once those saturate.
+            b_norm = 1.0 / (1.0 + math.log1p(bm25_pos.get(asin, len(bm25_ranked))))
             d_norm = dense_score.get(asin, 0.0)
             features[asin] = self._feature_vector(asin, slots, b_norm, d_norm)
         self._candidate_features = features
@@ -1558,11 +1568,20 @@ class Agent:
         )
 
         # --- Ask-vs-recommend policy (deterministic, computed before any LLM) ---
-        pool_size = len(candidates)
+        # Updated with AI: pool_size must reflect how narrow the CONSTRAINT-SATISFYING
+        # set is (so it shrinks as slots accumulate), not the raw recall-safe fused pool
+        # (which sits near FUSED_POOL=300 on virtually every turn and made K_SMALL=25
+        # unreachable). See self._last_matched_count set in _retrieve().
+        pool_size = getattr(self, "_last_matched_count", len(candidates))
         scores = self._top_scores(candidates, slots)
         margin = 0.0
-        if len(scores) >= 2 and scores[0] > 0:
-            margin = (scores[0] - scores[1]) / scores[0]
+        if len(scores) >= 2:
+            # Updated with AI: the fusion bias term routinely makes scores[0] negative,
+            # which previously failed the `scores[0] > 0` guard and left margin stuck at
+            # its 0.0 default on every turn. Use abs() so the ratio stays meaningful
+            # regardless of the constant bias offset (bias doesn't affect relative order).
+            denom = abs(scores[0]) if scores[0] != 0 else 1e-6
+            margin = (scores[0] - scores[1]) / denom
 
         should_recommend = (
             turn >= FORCE_RECOMMEND_TURN
