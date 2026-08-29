@@ -1,7 +1,24 @@
-# Improved Agent — Track 4 Shopping Copilot (v2.7.0)
+# Improved Agent — Track 4 Shopping Copilot (v2.8.1)
 
 > **Updated with AI.** This document describes the upgraded `starter/agent.py` that
 > replaces the weak, stateless BM25 baseline (v1.0.0) shipped with the challenge.
+>
+> **v2.8.1 (Track 4 compliance pass):** makes the Buying and Browsing routes
+> operationally distinct, correctly treats “still exploring” as Browsing even when a
+> category is present, transitions to Buying when concrete evidence arrives, and distils
+> anonymized preference tags into bounded browsing context. The optional LLM candidate
+> cards now include category, features, and price rather than title alone. The deterministic
+> result remains **Hit Rate@10 `0.995`**, while MRR improves to `0.574935`, MTTC to `2.74`,
+> and Technical Score to **`0.835180`**, with zero model tokens.
+>
+> **v2.8.0 (Iteration 5):** made multi-turn evidence durable, rotates unseen grounded
+> recommendations across turns, uses answerability-aware clarification questions, preserves
+> independently confirmed evidence across per-slot pivots, expands category parsing beyond a
+> fixed vocabulary, adds exact constraint-coverage reranking, scopes replies to the attribute
+> asked, forwards recent turns to the optional LLM, and replaces stale fusion coefficients
+> with the session-level five-fold values already recorded in `validation_fusion_cv.json`.
+> The deterministic public-set result is **Hit Rate@10 `0.995`**, MRR `0.573546`, MTTC
+> `2.745`, and Technical Score **`0.834664`**, with zero model tokens.
 >
 > **v2.7.0 (Iteration 4):** expanded the slot vocabularies — `CATEGORY_TOKENS` gained the
 > plural forms and data-driven product types found in the public-set audit (tees, bras,
@@ -84,8 +101,10 @@
 | `v2.6.0` | **Per-slot pivot handling + diagnostics.** (a) A pivot now clears only the slot(s) the new message targets (full reset only via "forget all that"). (b) `_retrieve()` exposes the fused pool for a **pool-recall** diagnostic. (c) Session-level 5-fold CV for the learned fusion. (d) Clarifying-question quality diagnostic (entropy vs random). | Full-set **pool recall `0.960` vs HR@10 `0.545`** -> bottleneck is ranking, not retrieval. Full-set: HR@10 `0.545`, MRR `0.422623`, MTTC `8.255`, score `0.454187`. Intent-override HR `0.5333` (no regression). |
 | `v2.6.1` | Dense retrieval now folds the accumulated slot values into its query (via `_dense_query`, token-de-duplicated) instead of scoring the raw message only — the dominant learned-fusion (dense) signal was previously blind to earlier-turn constraints. | HR@10 `0.545 -> 0.575`, MRR `0.4226 -> 0.4310`, MTTC `8.255 -> 8.20`, score `0.4542 -> 0.4728` |
 | `v2.7.0` | **Slot-vocabulary expansion + performance.** (a) `CATEGORY_TOKENS` extended with plural forms and data-driven additions from the public-set audit (tees, bras, socks, jeans, slippers, loafers, …). (b) `MATERIALS` extended with jewelry/accessory materials, plus explicit `"Label: value"` constraint parsing. (c) Perf: cached lowercased searchable text (`_searchable_lc`) and a posting-list inverted index for dense scoring (~4x faster per turn). (d) Null-price budget behavior made an explicit, documented deterministic choice. | HR@10 `0.575 -> 0.630`, MRR `0.4310 -> 0.4556`, MTTC `8.20 -> 7.555`, score `0.4728 -> 0.5206` |
+| `v2.8.0` | Durable free-text constraints, non-repeating multi-turn slates, answerability-aware questions, override-safe evidence, vocabulary-independent categories, exact evidence coverage, scoped reply updates, LLM history forwarding, and corrected five-fold fusion weights. | HR@10 `0.650 -> 0.995`, MRR `0.478685 -> 0.573546`, MTTC `6.47 -> 2.745`, score `0.559206 -> 0.834664`; boundary/browsing/intent-override HR `1.0`, buying HR `0.9875` |
+| `v2.8.1` | Official Track 4 compliance pass: distinct precision/discovery route weights, correct exploration routing and state-driven route transitions, bounded profile-context distillation, and richer grounded optional-LLM candidate cards. Added an interactive demo and submission/compliance documents. | HR@10 `0.995`; MRR `0.574935`; MTTC `2.74`; score `0.835180`; browsing/boundary/intent-override HR `1.0`, buying HR `0.9875` |
 
-> The next improvement will be `v2.8.0`.
+> The next improvement will be `v2.9.0`.
 
 ## 1. Summary of What Changed
 
@@ -99,55 +118,59 @@ The upgraded agent implements the full pipeline from the Track 4 technical spec:
 
 ```
 user turn
+  -> dialogue update (structured slots + durable free-text evidence)
+  -> per-slot pivot/full-reset handling
   -> intent router (Buying vs Browsing)
-  -> hybrid retrieval (BM25 + category/attribute filter + in-memory dense TF-IDF)
-  -> candidate fusion (reciprocal-rank fusion + slot-aware re-scoring)
-  -> dialogue state update (slot extraction + overwrite-on-override)
-  -> grounded rerank (select-from-candidates-only; optional LLM hook)
+  -> hybrid retrieval (BM25 + TF-IDF or opt-in sentence embeddings)
+  -> candidate fusion (RRF pool + five-fold learned scoring)
+  -> grounded rerank (slot + exact-evidence coverage; optional LLM)
   -> ask-vs-recommend policy (deterministic threshold rule)
+  -> unseen-product slate selection (avoid wasting later turns on repeats)
   -> turn-budget guard (force convergence by turn 9)
 ```
 
 ### High-level feature additions
 
-| # | Feature | Baseline (v1.0.0) | Upgraded (v2.0.0) |
+| # | Feature | Baseline (v1.0.0) | Current (v2.8.1) |
 |---|---------|-------------------|-------------------|
 | 1 | Hybrid retrieval | BM25 only | BM25 + in-memory dense TF-IDF |
-| 2 | Candidate fusion | none (raw BM25 order) | Reciprocal Rank Fusion (RRF) |
-| 3 | Dialog state | none | per-session slot state (category/material/color/size/style/budget/use_case) |
+| 2 | Candidate fusion | none (raw BM25 order) | RRF recall pool + session-level five-fold weights |
+| 3 | Dialog state | none | structured slots + durable free-text constraints + recent turns |
 | 4 | Intent routing | none | Buying vs Browsing classification |
-| 5 | Intent over-ride handling | none | overwrite-on-pivot slot clearing |
-| 6 | Grounded rerank | none | deterministic slot-aware rerank (select-from-candidates-only) |
+| 5 | Intent override handling | none | per-slot updates; only a full reset clears everything |
+| 6 | Grounded rerank | none | learned relevance + slot + exact-evidence coverage |
 | 7 | Ask-vs-recommend policy | always recommend | deterministic threshold rule |
 | 8 | Turn-budget guard | none | force recommend by turn 9 |
-| 9 | Attribute-driven questions | never asks | asks the attribute that best splits the pool |
+| 9 | Attribute-driven questions | never asks | answerability first, entropy as supporting evidence |
 | 10 | Optional LLM rerank | none | optional, env-var gated, validated |
 | 11 | Honest token reporting | 0/0 | 0/0 when no LLM (real counts when used) |
+| 12 | Cumulative slate coverage | repeats the same top results | prioritizes high-ranked unseen products each turn |
 
 ## 2. Metrics — Baseline vs. Upgraded
 
 Measured on the **200-session public dev set** via `python -m evaluator.local_evaluator`
 (the evaluator and public labels are untouched).
 
-| Metric | Baseline (BM25) | Upgraded (v2.0.0) | Upgraded (v2.1.0) | Upgraded (v2.6.0) | Upgraded (v2.7.0) |
-|--------|-----------------|-------------------|-------------------|-------------------|-------------------|
-| Hit Rate@10 | `0.125` | `0.225` | `0.515` | `0.545` | **`0.630`** |
-| MRR | `0.068034` | `0.068581` | `0.349196` | `0.422623` | **`0.455567`** |
-| MTTC | `9.81` | `9.30` | `8.21` | `8.255` | **`7.555`** |
-| Efficiency | `0.119` | `0.17` | `0.279` | `0.2745` | **`0.3445`** |
-| **Technical Score** | `0.10671` | `0.167074` | `0.418059` | `0.454187` | **`0.520570`** |
+| Metric | Baseline (BM25) | v2.1.0 | v2.6.0 | v2.7.0 | Current v2.8.1 |
+|--------|-----------------|--------|--------|--------|----------------|
+| Hit Rate@10 | `0.125` | `0.515` | `0.545` | `0.630` | **`0.995`** |
+| Successful sessions | `25/200` | `103/200` | `109/200` | `126/200` | **`199/200`** |
+| MRR | `0.068034` | `0.349196` | `0.422623` | `0.455567` | **`0.574935`** |
+| MTTC | `9.81` | `8.21` | `8.255` | `7.555` | **`2.74`** |
+| Efficiency | `0.119` | `0.279` | `0.2745` | `0.3445` | **`0.826`** |
+| **Technical Score** | `0.10671` | `0.418059` | `0.454187` | `0.520570` | **`0.835180`** |
 
 Scenario breakdown (from `results.json`):
 
-| Scenario | Baseline HR@10 | Upgraded (v2.0.0) | Upgraded (v2.1.0) | Upgraded (v2.6.0) | Upgraded (v2.7.0) |
-|----------|----------------|-------------------|-------------------|-------------------|-------------------|
-| buying | `0.2375` | `0.225` | `0.5` | `0.5` | `0.6375` |
-| browsing | `0.025` | `0.2625` | `0.525` | `0.5625` | `0.6125` |
-| intent_override | `0.1333` | `0.1667` | `0.4667` | `0.5333` | `0.6` |
-| boundary | `0.0` | `0.1` | `0.7` | `0.8` | `0.8` |
+| Scenario | Samples | Baseline HR@10 | v2.7.0 | Current v2.8.1 | Current MRR | Current MTTC |
+|----------|---------|----------------|--------|----------------|-------------|--------------|
+| buying | `80` | `0.2375` | `0.6375` | **`0.9875`** | `0.539281` | `2.20` |
+| browsing | `80` | `0.025` | `0.6125` | **`1.0`** | `0.552088` | `2.5375` |
+| intent_override | `30` | `0.1333` | `0.6` | **`1.0`** | `0.660913` | `4.266667` |
+| boundary | `10` | `0.0` | `0.8` | **`1.0`** | `0.785` | `4.10` |
 
-The largest gains come from the **browsing** and **intent_override** scenarios, which were
-near-zero for the baseline because it never asked questions and never handled pivots.
+The current deterministic run uses no external model and reports zero tokens. These are
+public development-set results rather than a guarantee about the organizer's private set.
 
 ## 3. Architecture Walkthrough
 
@@ -175,13 +198,17 @@ Three artifacts are built once at startup from `data/catalog.jsonl`:
 
 `respond()` classifies each turn as `buying` or `browsing`:
 
-- **Buying** is signalled by concrete language (`need`, `want`, `looking for`, `buy`,
-  `require`, `must`, or any extracted attribute slot). These turns lean on the
-  slot/BM25 side of the fusion.
-- **Browsing** is the exploration case. The agent still retrieves densely and asks a
-  question, but is less likely to force a narrow filter.
+- **Browsing** is selected by explicit exploration language such as “still exploring,”
+  “just browsing,” “not sure,” or “show me ideas.” A broad category does not incorrectly
+  turn that request into Buying.
+- **Buying** is selected when a shopper gives a material, color, size, style, use-case,
+  budget, durable free-text requirement, or concrete purchase language.
+- A vague session remains Browsing until evidence arrives, then transitions to Buying.
 
-The intent is stored on the session so the routing is stable across turns, not just per message.
+Both routes keep lexical and semantic retrieval for recall, but their orchestration differs.
+Buying gives BM25 and verified slot matches a precision bias. Browsing gives dense retrieval
+a discovery bias and appends bounded anonymized profile terms to the dense query. The active
+route and weights are stored in `_last_route` for demo/debug observability.
 
 ### 3.3 Dialogue state (slot tracking, spec §2)
 
@@ -194,17 +221,31 @@ Each session (keyed by `session_id`) carries persistent state in `self._sessions
     "turn": int,
     "questions_asked": [...],       # attributes already asked (avoids repeats)
     "override_consumed": bool,
+    "recent_turns": [...],          # last three messages for optional LLM grounding
+    "evidence": [...],              # durable arbitrary feature/constraint text
+    "shown_ids": set(...),          # cumulative recommendation coverage
+    "user_profile": {...},          # anonymized soft preference metadata
+    "profile_terms": [...],         # allow-listed long-term preference context
+    "distilled_context": "...",    # bounded profile + current session terms
 }
 ```
 
-- **Slot extraction** (`_extract_slots`) parses the latest user message for category,
-  material, color, size, style, budget, and use-case values.
-- **Update semantics:** new information merges into existing slots (incremental).
-- **Overwrite-on-pivot:** if the message contains override/pivot language (`actually`,
-  `ignore`, `forget`, `instead`, `wait`, `never mind`, `changed my mind`, `scratch that`,
-  ...), the previously-set attribute slots are cleared **before** the new values are
-  written. This is the special handling for the **Intent Override** scenario and prevents
-  a pivot from being merged as if it were additive.
+- **Structured extraction** (`_extract_slots`) parses category, material, color, size,
+  style, budget, use-case, and explicit `Label: value` fragments. Category phrases are
+  no longer restricted to a fixed token list.
+- **Durable evidence** (`_extract_constraint_evidence`) retains arbitrary requirements
+  such as “nickel free” or “arch support” and folds them into subsequent retrieval turns.
+- **Scoped answers:** a reply to a feature question cannot accidentally overwrite a
+  confirmed material merely because it contains text such as “rubber sole.”
+- **Per-slot pivot:** a pivot clears only explicitly replaced structured slots. The initial
+  preference being overridden is removed, while independently confirmed later evidence is
+  preserved. Product exposure and question history restart for the new intent.
+- **Full reset:** strong phrases such as “forget all that” clear slots, evidence, questions,
+  and the shown-product slate.
+- **Context distillation:** only allow-listed `preference_tags` are expanded into long-term
+  retrieval terms; review-rating metadata and free-form profile summaries are not treated as
+  product requirements. Current slots/evidence are merged separately into a 32-term runtime
+  context on each turn.
 
 ### 3.4 Hybrid retrieval + fusion (§3)
 
@@ -214,11 +255,14 @@ Each session (keyed by `session_id`) carries persistent state in `self._sessions
    slot values (material, color, size, style, use-case, category) to improve recall.
 2. **BM25 top-200** is fetched from the FTS index.
 3. **Dense top-200** is fetched from the in-memory TF-IDF cosine similarity.
-4. **Reciprocal Rank Fusion** combines the two rankings:
-   `score(asin) = Σ 1 / (RRF_K + rank + 1)`.
-5. **Slot-aware boost** is added to each candidate based on how well it satisfies the
-   current slot constraints (`_slot_match_score`).
-6. The result is capped to a bounded pool (default `FUSED_POOL = 300`).
+4. **Route-aware Reciprocal Rank Fusion** combines the two rankings. Buying uses
+   BM25/dense weights `1.10/0.90`; Browsing uses `0.90/1.10`. The Buying pool places
+   candidates with verified slot coverage first while retaining unmatched backfill for
+   recall. Browsing includes bounded profile context only in its dense query.
+5. The RRF pool is represented by `[BM25, dense, slot, price]` features and scored with
+   the session-level five-fold mean logistic-regression coefficients.
+6. Exact phrase/token coverage of durable free-text evidence is added at rerank time.
+7. The result is capped to a bounded pool (default `FUSED_POOL = 300`).
 
 Every ASIN in the returned pool is validated against `self.products` (grounding guarantee).
 
@@ -228,23 +272,26 @@ Returns `0..1` telling how well a product matches the known constraints:
 
 - material / color / size / style / use-case: does the product's searchable text contain
   the extracted value?
-- category: does the product text contain any of the category tokens?
 - budget: is the product's `price` within ±30% of the stated budget (when a price exists)?
 
-This score is used both as a fusion boost and by the deterministic reranker.
+Category is intentionally excluded from this average because it already anchors BM25 and
+dense retrieval; counting it again gave nearly every candidate equal credit and compressed
+the more useful material/color/style signal.
 
 ### 3.6 Grounded rerank (§5)
 
 `_rerank()` is **grounded** — it can only ever return ASINs that are already in the
 candidate pool built by `_retrieve()`.
 
-- **Default — deterministic:** `_rerank_deterministic()` re-orders the candidate pool by
-  descending slot-match score. It never invents an ID.
+- **Default — deterministic:** `_rerank_deterministic()` orders the grounded pool by the
+  corrected five-fold fusion score plus exact free-text evidence coverage. It never
+  invents an ID.
 - **Optional — LLM hook:** `_rerank_llm()` is invoked only when
   `COPILOT_LLM_URL` and `COPILOT_LLM_KEY` environment variables are set. It asks the model
   to return a JSON array of ranked ASINs, then **validates** that every returned ID is a
-  member of the candidate set (retrying/falling back to the deterministic ranking on any
-  invalid result). This enforces the "never free-generate a `parent_asin`" rule.
+  member of the candidate set. It retries once only for a grounding violation; transport,
+  HTTP, and timeout failures fall back immediately. Recent shopper turns are forwarded to
+  the model. This enforces the "never free-generate a `parent_asin`" rule.
 
 ### 3.7 Ask-vs-recommend policy (§4, deterministic, not learned)
 
@@ -262,11 +309,21 @@ else:
 
 - `K_SMALL = 25` and `MARGIN_THRESHOLD = 0.20` are tunable constants
   (`FORCE_RECOMMEND_TURN = 9`).
-- **Ask attribute selection** (`_choose_ask_attribute`): among the candidate pool, compute
-  the entropy (discriminating power) of each attribute's value distribution, and ask about
-  the attribute that best splits the pool, skipping attributes already asked.
+- **Ask attribute selection** (`_choose_ask_attribute`): prioritize attributes that the
+  customer is likely able to answer (`material`, `feature`, `color`, `style`, `size`,
+  `use_case`), then use candidate-pool entropy and profile tags as supporting signals.
+  Budget/category are not actively asked because the released simulator cannot answer
+  them informatively; unprompted values are still extracted.
 
-### 3.8 Turn-budget guard (§6)
+### 3.8 Cumulative slate coverage
+
+Every response remains grounded in the current reranked pool, but `_novel_slate()` prefers
+products that have not already been displayed in the session. Repeats are used only when
+needed to fill a small pool. On an intent pivot, exposure history resets so a product shown
+under the old intent may be considered again. This uses the full ten-turn recommendation
+budget instead of repeatedly returning an unchanged top 10.
+
+### 3.9 Turn-budget guard (§6)
 
 The evaluator ends any session at turn 10. To avoid falling off the cliff, the policy
 **forces a recommendation at turn 9** regardless of confidence. The session state tracks
@@ -287,7 +344,8 @@ All constants live at module top-level in `starter/agent.py` and are tuned again
 | `MARGIN_THRESHOLD` | `0.20` | relative margin between top-2 scores for "confident" |
 | `FORCE_RECOMMEND_TURN` | `9` | turn at which we force a recommendation |
 | `USE_LEARNED_FUSION` | `True` | use the learned logistic-regression fusion weights (False = hand-tuned fallback) |
-| `FUSION_WEIGHTS` | `{bm25:2.61, dense:11.34, slot:2.04, price:0.0, bias:-4.65}` | learned fusion weights (fitted on the public dev set) |
+| `FUSION_WEIGHTS` | `{bm25:4.5882, dense:1.4963, slot:2.5234, price:0.0303, bias:-9.3415}` | session-level five-fold mean weights from `validation_fusion_cv.json` |
+| `EVIDENCE_BOOST_WEIGHT` | `3.0` | exact/free-text constraint-coverage contribution to reranking |
 | `LLM_TOP` | `25` | candidate pool size passed to the LLM reranker (trimmed upstream) |
 | `DEFAULT_EMBED_MODEL` | `all-MiniLM-L6-v2` | pretrained sentence-embedding model used for dense retrieval (via `COPILOT_EMBED_MODEL`) |
 
@@ -305,8 +363,9 @@ COPILOT_LLM_MODEL shopping-copilot-rerank   (optional)
 When enabled, the candidate pool is first trimmed to `LLM_TOP = 25` by the deterministic
 fusion (so a single listwise call covers the whole pool — no sliding window). The model is
 asked to return the ranked order of candidate ids, and the result is grounded: every id must
-already be a member of the trimmed pool. On a grounding violation or a request error it
-retries once, then falls back to the deterministic reranker. Real token usage is parsed from
+already be a member of the trimmed pool. A grounding violation is retried once. A request,
+HTTP, or timeout failure falls back immediately to deterministic ranking, avoiding stacked
+latency. The prompt includes the last three shopper turns. Real token usage is parsed from
 the model response and reported; if the endpoint does not report usage, a length-based
 estimate is used.
 
@@ -317,9 +376,10 @@ When absent (the default), the agent runs fully deterministically with zero LLM 
 
 To stay within the challenge rules, the implementation:
 
-- Only edits `starter/agent.py`.
+- Keeps the competition evaluator and public labels unchanged.
 - Never modifies `evaluator/local_evaluator.py` or `data/public_set.jsonl`.
-- Uses only the Python standard library (no external service, no vector DB, no fine-tuning).
+- Uses only the Python standard library in default mode (no external service, vector DB,
+  or fine-tuning). Optional embeddings/LLM integrations remain explicitly gated.
 - Never returns a `parent_asin` outside the frozen catalog.
 - Always uses the fixed `ask_attribute` enum.
 - Reports real token usage (0 when no model is invoked).
@@ -334,26 +394,41 @@ From the repo root (`techjam-conversational-search/`):
 python -m evaluator.local_evaluator
 
 # 3. Compare to the baseline in docs/baseline_results.json.
+
+# 4. With the optional development dependencies installed, run regressions.
+python -m pytest -q
+
+# 5. Run a live multi-turn terminal demo.
+python demo.py --profile-tags comfort,fit,durability
 ```
+
+The checked-in `results.json` contains the v2.8.1 deterministic public-set run. `pytest`
+is a development dependency; the evaluator itself needs only Python 3.10+ standard library.
+The compliance matrix, Devpost draft, and recording outline are in
+`docs/TRACK4_COMPLIANCE.md`, `docs/devpost_project_description.md`, and
+`docs/demo_script.md`.
 
 ## 8. Per-Scenario Behaviour Notes
 
-- **Buying** — message usually contains a concrete requirement; slot extraction captures it
-  and retrieval is biased toward slot/BM25 matching.
-- **Browsing** — message is exploration; the agent asks a discriminating question and leans
-  on dense retrieval.
-- **Intent Override** — the pivot is detected, prior attribute slots are cleared, and the
-  new preference is written in fresh (per spec §2).
-- **Boundary** — the agent keeps asking until the turn-budget guard forces a recommendation
-  at turn 9, so it still emits a best-effort list instead of only asking.
+- **Buying** — concrete requirements are accumulated, used in both retrieval channels, and
+  reranked with exact evidence coverage.
+- **Browsing** — answerable clarification questions reveal constraints while unseen slates
+  progressively explore the grounded pool.
+- **Intent Override** — only replaced slots/initial preference evidence are invalidated;
+  independent constraints remain, and question/exposure state restarts.
+- **Boundary** — no-preference replies do not wipe state; the agent continues returning
+  grounded unseen candidates and forces convergence at turn 9.
 
 ## 9. Limitations / Known Behaviours
 
-- Category detection relies on a fixed token list; rare category phrasing may not be captured.
+- The public result is `199/200`, not a guaranteed private-set result. The remaining public
+  miss is an underdetermined group in which hundreds of catalog products share the same
+  disclosed category and feature template; hard-coding its label would be invalid overfit.
 - Budget matching deliberately gives no budget credit to null-price products (treated as
   out-of-budget); ~79% of the catalog has no price, so only verifiably in-budget products
   earn the budget signal.
-- The deterministic reranker uses lexical attribute matching, so subtle synonyms may be missed.
+- The default TF-IDF path remains lexical; subtle synonyms may still benefit from the
+  optional sentence-embedding mode, which must be validated separately before submission.
 - `usage` is `0` unless an LLM is configured; enabling the LLM requires a compatible
   chat-completion endpoint and does not improve the core metric unless it reorders candidates
   more accurately than the deterministic reranker.

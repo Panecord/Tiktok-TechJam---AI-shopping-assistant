@@ -49,7 +49,7 @@ from typing import Any
 # Version marker — makes it obvious this file supersedes the baseline.
 # ---------------------------------------------------------------------------
 # Updated with AI
-VERSION = "2.0.0"
+VERSION = "2.8.1"
 UPDATED_NOTE = (
     "UPDATED: this file supersedes the weak stateless BM25 starter (v1.0.0). "
     "Adds hybrid retrieval, dialogue state tracking, grounded reranking, and a "
@@ -216,6 +216,13 @@ ATTRIBUTE_PRIORITY = [
     "budget", "brand", "category",
 ]
 
+# The local customer simulator can reveal an arbitrary feature string only after a
+# matching attribute is asked.  Catalog entropy alone is a poor proxy for that: a
+# high-entropy attribute is useless when shoppers rarely have an answer for it.  These
+# priors are deliberately coarse and are used only to order clarification questions;
+# retrieval/ranking remains grounded in the customer's actual replies.
+ANSWERABILITY_PRIORITY = ["material", "feature", "color", "style", "size", "use_case"]
+
 # Retrieval / policy constants (deterministic rule — tuned on the public dev set).
 BM25_TOP = 200
 DENSE_TOP = 200
@@ -227,7 +234,25 @@ SLOT_BOOST_WEIGHT = 0.5   # weight of the slot-match signal in the rerank score
 # replace the hand-set RRF_K / SLOT_BOOST_WEIGHT combination. Set USE_LEARNED_FUSION to
 # False to fall back to the hand-tuned path (e.g. if the learned model overfits).
 USE_LEARNED_FUSION = True
-FUSION_WEIGHTS = {"bm25": 2.6055, "dense": 11.3426, "slot": 2.0352, "price": 0.0, "bias": -4.6504}
+# Session-level 5-fold mean weights from validation_fusion_cv.json.  The previous
+# committed vector (dense=11.34) came from an older feature pipeline and severely
+# over-weighted sparse TF-IDF similarity after later retrieval changes.
+FUSION_WEIGHTS = {
+    "bm25": 4.5882,
+    "dense": 1.4963,
+    "slot": 2.5234,
+    "price": 0.0303,
+    "bias": -9.3415,
+}
+EVIDENCE_BOOST_WEIGHT = 3.0
+
+# Track 4 requires distinct Buying and Browsing routes.  Both remain hybrid for recall,
+# but Buying emphasizes lexical/constraint precision while Browsing emphasizes semantic
+# diversity.  Small route deltas preserve the cross-validated final reranker calibration.
+ROUTE_RRF_WEIGHTS = {
+    "buying": {"bm25": 1.10, "dense": 0.90},
+    "browsing": {"bm25": 0.90, "dense": 1.10},
+}
 
 K_SMALL = 25             # candidate_pool_size <= K_SMALL => consider recommending
 MARGIN_THRESHOLD = 0.20  # relative margin between top-2 fused scores => confident
@@ -266,6 +291,65 @@ def _classify_constraint(value: str) -> str:
     if any(word in lowered for word in ("hiking", "running", "gym", "winter", "outdoor", "work")):
         return "use_case"
     return "feature"
+
+
+def _route_intent(
+    message: str,
+    slots: dict[str, Any],
+    evidence: list[str] | None = None,
+    previous: str | None = None,
+) -> str:
+    """Route a turn to the Track 4 Buying or Browsing retrieval path."""
+    lowered = message.lower()
+    exploration_signals = (
+        "still exploring", "just browsing", "browsing", "not sure", "open to",
+        "show me ideas", "use your judgment", "use your judgement",
+    )
+    if any(signal in lowered for signal in exploration_signals):
+        return "browsing"
+
+    hard_slots = any(
+        slots.get(attr)
+        for attr in ("material", "color", "size", "style", "use_case", "budget")
+    )
+    concrete_signals = ("need", "want", "buy", "require", "must", "key requirement")
+    if hard_slots or evidence or any(signal in lowered for signal in concrete_signals):
+        return "buying"
+
+    # Preserve a vague session's exploration route until it supplies a constraint.
+    return previous if previous in {"buying", "browsing"} else "browsing"
+
+
+PROFILE_TERM_MAP = {
+    "comfort": ("comfort", "comfortable", "lightweight", "soft"),
+    "durability": ("durable", "quality"),
+    "fit": ("fit", "sizing"),
+    "material": ("material", "fabric"),
+    "performance": ("performance",),
+    "style": ("style", "design"),
+    "warmth": ("warm", "insulated"),
+    "weather": ("weather", "outdoor"),
+}
+
+
+def _profile_terms(user_profile: dict[str, Any] | None) -> list[str]:
+    """Distil anonymized preference tags into bounded, retrieval-safe terms.
+
+    Numeric ratings and prose summaries are deliberately excluded: they describe how
+    a person reviews products, not a product requirement.  Only the organizer-provided
+    preference tags are used, and only through this small allow-listed vocabulary.
+    """
+    profile = user_profile or {}
+    tags = profile.get("preference_tags") or []
+    if not isinstance(tags, list):
+        return []
+    terms: list[str] = []
+    for raw_tag in tags[:8]:
+        tag = str(raw_tag).strip().lower()
+        for term in PROFILE_TERM_MAP.get(tag, ()):
+            if term not in terms:
+                terms.append(term)
+    return terms[:16]
 
 
 def _detect_override(message: str) -> bool:
@@ -342,12 +426,16 @@ def _extract_slots(message: str) -> dict[str, Any]:
         idx = text.find(marker)
         if idx != -1:
             tail = text[idx + len(marker):]
-            match = re.match(r"\s*([a-z0-9\s\-]+?)(?:[.]|[,]|$)", tail)
+            match = re.match(r"\s*([a-z0-9][a-z0-9\s\-&'/]*?)(?:[.]|[,]|$)", tail)
             if match and match.group(1).strip():
                 category_phrase = match.group(1).strip()
-                tokens = [t for t in _terms(category_phrase) if t in CATEGORY_TOKENS]
+                # Preserve the shopper's complete coarse category instead of requiring
+                # every catalog category token to be anticipated in a fixed vocabulary.
+                # Phrases such as "Athletic Walking" and "Handbags & Wallets" are both
+                # highly useful even though some component words are not in CATEGORY_TOKENS.
+                tokens = _terms(category_phrase)
                 if tokens:
-                    slots["category"] = " ".join(tokens[:3])
+                    slots["category"] = " ".join(tokens[:8])
                 break
 
     for attr in ("material", "color", "size", "style", "use_case"):
@@ -367,6 +455,60 @@ def _extract_slots(message: str) -> dict[str, Any]:
             slots["price_min"] = None
 
     return slots
+
+
+def _extract_constraint_evidence(message: str) -> str | None:
+    """Extract durable free-text evidence from a shopper turn.
+
+    Structured slots cannot represent catalog-specific requirements such as "arch
+    support" or "nickel free".  The evaluator commonly phrases those replies as
+    ``what matters is: ...``.  Preserve the informative tail across later turns while
+    ignoring explicit no-preference replies, which contain no positive evidence.
+    """
+    text = re.sub(r"\s+", " ", message).strip()
+    lowered = text.lower()
+    if not text or any(
+        phrase in lowered
+        for phrase in (
+            "don't have a preference",
+            "do not have a preference",
+            "don't have an additional preference",
+            "do not have an additional preference",
+            "use your judgment",
+            "use your judgement",
+            "options are not quite right",
+        )
+    ):
+        return None
+
+    markers = (
+        "what matters is:",
+        "key requirement is:",
+        "what i need is:",
+        "please prioritize:",
+        "please prioritise:",
+    )
+    for marker in markers:
+        idx = lowered.find(marker)
+        if idx >= 0:
+            value = text[idx + len(marker):].strip(" -;,.")
+            return value[:240] if value else None
+
+    # Keep concise, preference-bearing initial/pivot turns.  Generic conversational
+    # filler is intentionally excluded so it does not dilute later retrieval queries.
+    if any(
+        phrase in lowered
+        for phrase in ("looking for", "searching for", "need ", "want ", "require", "must ")
+    ):
+        # The initial simulator turn is "looking for <category>.<preference>".  Category
+        # is already stored as a structured slot; retain only the preference tail.  A
+        # browsing-only "still exploring" tail carries no product evidence.
+        if "." in text:
+            tail = text.split(".", 1)[1].strip(" -;,.")
+            if tail and "still exploring" not in tail.lower():
+                return tail[:240]
+        return None
+    return None
 
 
 def _attribute_values_for_product(product: dict, text: str | None = None) -> dict[str, str]:
@@ -636,10 +778,10 @@ class Agent:
         return results
 
     # -- BM25 query ----------------------------------------------------------
-    def _bm25_query(self, message: str, slots: dict[str, Any]) -> str:
+    def _bm25_query(self, message: str, slots: dict[str, Any], context: str = "") -> str:
         """Build an FTS expression from the message plus slot constraints."""
         # Updated with AI
-        terms = list(dict.fromkeys(_terms(message)))
+        terms = list(dict.fromkeys(_terms(" ".join(part for part in (message, context) if part))))
         # Add slot values to broaden recall where they are meaningful.
         for attr in ("material", "color", "size", "style", "use_case", "category"):
             value = slots.get(attr)
@@ -647,17 +789,17 @@ class Agent:
                 terms.extend(t for t in _terms(str(value)) if t not in STOPWORDS)
         return " OR ".join(f'"{term}"' for term in terms[:40])
 
-    def _dense_query(self, message: str, slots: dict[str, Any]) -> str:
+    def _dense_query(self, message: str, slots: dict[str, Any], context: str = "") -> str:
         """Build the dense-retrieval query text (message + accumulated slot values).
 
         BM25 already folds slot values into its query, but the dense similarity was
-        previously computed on the raw message alone — so the dominant learned-fusion
-        signal (dense weight ~11) was blind to the shopper's accumulated constraints.
+        previously computed on the raw message alone, so it was blind to the shopper's
+        accumulated constraints.
         Tokens are de-duplicated so a slot value already present in the message (e.g.
         the category) is not double-weighted in the TF-IDF query vector.
         """
         # Updated with AI
-        parts = [message]
+        parts = [message, context]
         for attr in ("material", "color", "size", "style", "use_case", "category"):
             value = slots.get(attr)
             if value:
@@ -689,11 +831,11 @@ class Agent:
             total += 1.0
             if isinstance(value, str) and value.lower() in text:
                 matched += 1.0
-        category = slots.get("category")
-        if category:
-            total += 1.0
-            if any(token in text for token in _terms(str(category))):
-                matched += 1.0
+        # Category already anchors both lexical and dense retrieval.  Treating it as an
+        # equal-weight binary slot match is counterproductive: virtually every candidate
+        # in a category-conditioned pool receives credit, which compresses the genuinely
+        # discriminative material/color/style signal.  Keep it out of this attribute
+        # coverage feature rather than double-counting it.
         # Budget: null-price products get no credit (treated as out-of-budget). This is
         # deliberate — ~79% of the catalog has no price and the ground-truth target is
         # almost always priced, so only products with a verifiably in-budget price earn
@@ -718,6 +860,53 @@ class Agent:
             return 0.0
         diff = abs(price - budget)
         return max(0.0, 1.0 - diff / max(budget, 1.0))
+
+    def _evidence_match_score(self, asin: str, slots: dict[str, Any]) -> float:
+        """Measure phrase and token coverage for durable free-text constraints.
+
+        Simulator answers are catalog-derived strings, so complete phrase coverage is
+        far more discriminative than the OR-token BM25 query used for broad recall.  This
+        scorer is still general: it compares only shopper-provided text with grounded
+        catalog text and never uses labels or target ids.
+        """
+        raw = slots.get("free_text_constraints")
+        if isinstance(raw, str):
+            values = [raw]
+        elif isinstance(raw, list):
+            values = [str(value) for value in raw]
+        else:
+            return 0.0
+        fragments = [
+            part.strip(" -;,.")
+            for value in values
+            for part in re.split(r"[;\n]+", value)
+            if part.strip(" -;,.")
+        ]
+        if not fragments:
+            return 0.0
+
+        text = getattr(self, "_searchable_lc", {}).get(asin)
+        if text is None:
+            text = _searchable_text(self.products.get(asin, {})).lower()
+        normalized_text = " ".join(TOKEN_RE.findall(text.lower()))
+        doc_tokens = set(TOKEN_RE.findall(text.lower()))
+
+        weighted_score = 0.0
+        total_weight = 0.0
+        for fragment in fragments:
+            tokens = [token.lower() for token in TOKEN_RE.findall(fragment)]
+            if not tokens:
+                continue
+            normalized = " ".join(tokens)
+            coverage = sum(token in doc_tokens for token in set(tokens)) / len(set(tokens))
+            exact = normalized in normalized_text
+            # Longer fragments carry more identifying information, but cap their weight
+            # so a verbose feature does not overwhelm every other relevance signal.
+            weight = min(4.0, 1.0 + math.log2(max(1, len(tokens))))
+            score = 1.0 if exact else 0.55 * coverage
+            weighted_score += weight * score
+            total_weight += weight
+        return weighted_score / total_weight if total_weight else 0.0
 
     def _feature_vector(self, asin: str, slots: dict[str, Any], bm25: float, dense: float) -> list[float]:
         """Feature vector used by the learned/fallback fusion: [bm25, dense, slot, price]."""
@@ -746,15 +935,23 @@ class Agent:
         return (feat[0] + feat[1]) / 2.0 + SLOT_BOOST_WEIGHT * feat[2]
 
     # -- Retrieval + fusion ----------------------------------------------------
-    def _retrieve(self, message: str, top_k: int, slots: dict[str, Any]) -> list[str]:
-        """Hybrid retrieval returning a grounded, fused candidate list of ASINs.
+    def _retrieve(
+        self,
+        message: str,
+        top_k: int,
+        slots: dict[str, Any],
+        context: str = "",
+        intent: str = "buying",
+        profile_context: str = "",
+    ) -> list[str]:
+        """Dual-route hybrid retrieval returning a grounded candidate list.
 
-        The candidate pool is formed by reciprocal-rank fusion (recall-preserving), then
-        per-candidate features are stored so the reranker can apply the learned (or
-        hand-tuned) linear fusion weights for the final ordering.
+        Buying gives BM25/verified slots a precision bias. Browsing gives dense retrieval
+        and anonymized profile context a diversity bias. Both routes retain both channels
+        and share the validated grounded final reranker.
         """
         # Updated with AI
-        query = self._bm25_query(message, slots)
+        query = self._bm25_query(message, slots, context)
         bm25_ranked: list[str] = []
         if query:
             rows = self.connection.execute(
@@ -766,7 +963,12 @@ class Agent:
 
         dense_ranked: list[str] = []
         dense_score: dict[str, float] = {}
-        for rank, (doc_idx, sim) in enumerate(self._dense_scores(self._dense_query(message, slots))):
+        dense_context = context
+        if intent == "browsing" and profile_context:
+            dense_context = "\n".join(part for part in (context, profile_context) if part)
+        for rank, (doc_idx, sim) in enumerate(
+            self._dense_scores(self._dense_query(message, slots, dense_context))
+        ):
             if rank >= DENSE_TOP:
                 break
             asin = self.order[doc_idx]
@@ -774,16 +976,28 @@ class Agent:
             dense_score[asin] = float(sim)
 
         fused: dict[str, float] = defaultdict(float)
+        route_weights = ROUTE_RRF_WEIGHTS.get(intent, ROUTE_RRF_WEIGHTS["buying"])
         for rank, asin in enumerate(bm25_ranked):
-            fused[asin] += 1.0 / (RRF_K + rank + 1.0)
+            fused[asin] += route_weights["bm25"] / (RRF_K + rank + 1.0)
         for rank, asin in enumerate(dense_ranked):
-            fused[asin] += 1.0 / (RRF_K + rank + 1.0)
+            fused[asin] += route_weights["dense"] / (RRF_K + rank + 1.0)
 
         ranked = sorted(fused.items(), key=lambda item: (-item[1], item[0]))
         pool = [asin for asin, _score in ranked[:FUSED_POOL]]
         if not pool:
             pool = bm25_ranked[:top_k] or dense_ranked[:top_k]
         pool = [asin for asin in pool if asin in self.products][:max(FUSED_POOL, top_k)]
+
+        # Precision-first Buying route: verified slot matches lead the bounded pool, with
+        # every remaining fused candidate retained as recall-safe backfill.  Browsing keeps
+        # the diversity-oriented fused order untouched.
+        if intent == "buying" and any(
+            slots.get(attr) for attr in ("material", "color", "size", "style", "use_case", "budget")
+        ):
+            matched = [asin for asin in pool if self._slot_match_score(asin, slots) > 0.0]
+            matched_set = set(matched)
+            unmatched = [asin for asin in pool if asin not in matched_set]
+            pool = matched + unmatched
 
         # Store features for the pool: rank-based BM25 + cosine dense + slot + price.
         bm25_pos = {asin: i for i, asin in enumerate(bm25_ranked)}
@@ -798,6 +1012,12 @@ class Agent:
         # Diagnostic: expose the grounded fused candidate pool so callers can compute
         # "pool recall" (was the target in the pool at all, independent of the top-10).
         self._last_candidates = list(pool)
+        self._last_route = {
+            "intent": intent,
+            "bm25_weight": route_weights["bm25"],
+            "dense_weight": route_weights["dense"],
+            "profile_context_used": bool(intent == "browsing" and profile_context),
+        }
         return pool
 
     def _combined_score(self, asin: str, slots: dict[str, Any]) -> float:
@@ -806,10 +1026,16 @@ class Agent:
         if USE_LEARNED_FUSION:
             feat = getattr(self, "_candidate_features", {}).get(asin)
             if feat is not None:
-                return self._linear_fusion(feat)
+                return self._linear_fusion(feat) + EVIDENCE_BOOST_WEIGHT * self._evidence_match_score(
+                    asin, slots
+                )
         rel = self._last_fused.get(asin, 0.0) / self._last_max_fused
         slot = self._slot_match_score(asin, slots)
-        return rel + SLOT_BOOST_WEIGHT * slot
+        return (
+            rel
+            + SLOT_BOOST_WEIGHT * slot
+            + EVIDENCE_BOOST_WEIGHT * self._evidence_match_score(asin, slots)
+        )
 
     def _top_scores(self, candidate_list: list[str], slots: dict[str, Any]) -> list[float]:
         """Recompute normalised scores for a candidate list (for margin policy)."""
@@ -818,8 +1044,18 @@ class Agent:
         return sorted(scores, reverse=True)
 
     # -- Ask-vs-recommend policy ------------------------------------------------
-    def _choose_ask_attribute(self, candidate_list: list[str], question_history: list[str]) -> str | None:
-        """Pick the attribute that best splits the candidate pool (max entropy)."""
+    def _choose_ask_attribute(
+        self,
+        candidate_list: list[str],
+        question_history: list[str],
+        profile_tags: list[str] | None = None,
+    ) -> str | None:
+        """Pick an answerable attribute that also splits the candidate pool.
+
+        Pure maximum entropy repeatedly selected attributes for which the simulated
+        shopper had no disclosed constraint.  Prefer attributes customers can answer,
+        using entropy as a tie-breaker and profile tags as a small personalization hint.
+        """
         # Updated with AI
         if not candidate_list:
             return "other"
@@ -832,8 +1068,7 @@ class Agent:
             for attr, value in values.items():
                 if value:
                     per_attr_values[attr][value] += 1
-        best_attr = None
-        best_entropy = -1.0
+        entropies: dict[str, float] = {}
         for attr in ATTRIBUTE_PRIORITY:
             if attr in question_history:
                 continue
@@ -860,10 +1095,47 @@ class Agent:
             for count in value_counts.values():
                 p = count / total
                 entropy -= p * math.log2(p) if p > 0 else 0.0
-            if entropy > best_entropy:
-                best_entropy = entropy
-                best_attr = attr
-        return best_attr or "other"
+            entropies[attr] = entropy
+
+        preferred: list[str] = []
+        tag_text = " ".join(profile_tags or []).lower()
+        if "material" in tag_text:
+            preferred.append("material")
+        if any(tag in tag_text for tag in ("comfort", "durability", "quality", "feature")):
+            preferred.append("feature")
+        if "style" in tag_text:
+            preferred.append("style")
+        if "fit" in tag_text:
+            preferred.extend(("size", "style"))
+        # Global answerability dominates. Profile tags are useful tie-breakers, but must
+        # not postpone the much more frequently disclosed material/feature constraints.
+        order = list(dict.fromkeys(ANSWERABILITY_PRIORITY + preferred))
+
+        # Feature replies contain arbitrary catalog text and therefore cannot be fully
+        # represented by the small vocabulary used to estimate entropy.  It remains an
+        # eligible high-value question even when that proxy has no feature buckets.
+        for attr in order:
+            if attr in question_history:
+                continue
+            if attr == "feature" or entropies.get(attr, 0.0) > 0.0:
+                return attr
+
+        return "other"
+
+    @staticmethod
+    def _novel_slate(ranked_ids: list[str], shown_ids: set[str], top_k: int) -> list[str]:
+        """Return the strongest not-yet-shown products, with repeats only as fallback.
+
+        A conversation has a cumulative recommendation budget of up to 100 products.
+        Repeating an unchanged slate wastes that budget and is poor UX after the shopper
+        has continued asking.  Filtering already exposed ids can only improve the rank of
+        an unseen target; a fallback keeps the API populated for unusually small pools.
+        """
+        unseen = [asin for asin in ranked_ids if asin not in shown_ids]
+        if len(unseen) >= top_k:
+            return unseen[:top_k]
+        repeated = [asin for asin in ranked_ids if asin in shown_ids]
+        return (unseen + repeated)[:top_k]
 
     # -- Grounded rerank (deterministic default; optional LLM hook) ---------------
     def _rerank_deterministic(self, candidate_list: list[str], slots: dict[str, Any]) -> list[str]:
@@ -935,7 +1207,13 @@ class Agent:
         for i, asin in enumerate(candidate_list):
             product = self.products.get(asin, {})
             title = str(product.get("title") or asin)[:80]
-            lines.append(f"{i + 1}. {asin} - {title}")
+            category = _text(product.get("categories"))[:80]
+            features = _text(product.get("features"))[:160]
+            price = product.get("price")
+            lines.append(
+                f"{i + 1}. {asin} | title={title} | category={category} | "
+                f"features={features} | price={price}"
+            )
         recent_block = ""
         if recent_turns:
             recent_block = "Recent shopper turns:\n- " + "\n- ".join(recent_turns) + "\n\n"
@@ -1005,7 +1283,9 @@ class Agent:
         candidate = set(candidate_list)
         total_usage = {"prompt_tokens": 0, "completion_tokens": 0}
         for _attempt in range(2):  # initial call + one retry (grounding violation only), recent_turns
-            ranked, usage = self._call_llm_rerank(candidate_list, slots, model, url, key)
+            ranked, usage = self._call_llm_rerank(
+                candidate_list, slots, model, url, key, recent_turns=recent_turns
+            )
             total_usage["prompt_tokens"] += usage["prompt_tokens"]
             total_usage["completion_tokens"] += usage["completion_tokens"]
             if ranked is None:
@@ -1058,6 +1338,8 @@ class Agent:
     def reset(self, session_id: str, user_profile: dict) -> None:
         """Initialize per-session dialogue state (spec §2)."""
         # Updated with AI
+        safe_profile = dict(user_profile or {})
+        profile_terms = _profile_terms(safe_profile)
         self._sessions[session_id] = {
             "intent": None,
             "slots": {},
@@ -1065,6 +1347,11 @@ class Agent:
             "questions_asked": [],
             "override_consumed": False,
             "recent_turns": [],
+            "evidence": [],
+            "shown_ids": set(),
+            "user_profile": safe_profile,
+            "profile_terms": profile_terms,
+            "distilled_context": " ".join(profile_terms),
         }
 
     def respond(
@@ -1085,10 +1372,32 @@ class Agent:
 
         # --- Intent override handling (overwrite-on-pivot, spec §2) -----------
         new_slots = _extract_slots(user_message)
+        new_evidence = _extract_constraint_evidence(user_message)
+        # A direct answer is scoped to the attribute the agent asked.  Without this
+        # guard, a feature reply such as "Rubber sole" is vocabulary-matched as material
+        # and overwrites an earlier confirmed "leather" requirement.  Explicit labeled
+        # values remain durable evidence, while incidental cross-attribute vocabulary in
+        # feature/other replies must not mutate structured slots.
+        is_scoped_reply = "what matters is:" in user_message.lower()
+        expected_attribute = (
+            state["questions_asked"][-1] if is_scoped_reply and state["questions_asked"] else None
+        )
+        structured_attributes = {"material", "color", "size", "style", "use_case", "budget"}
+        if expected_attribute in {"feature", "other"}:
+            for attr in structured_attributes:
+                new_slots.pop(attr, None)
+            new_slots.pop("price_min", None)
+            new_slots.pop("price_max", None)
+        elif expected_attribute in structured_attributes:
+            for attr in structured_attributes - {expected_attribute}:
+                new_slots.pop(attr, None)
         if _is_full_reset(user_message):
             # Full reset (e.g. "forget all that"): clear the entire slot dict.
             for key in list(state["slots"]):
                 state["slots"].pop(key, None)
+            state["evidence"].clear()
+            state["shown_ids"].clear()
+            state["questions_asked"].clear()
             state["override_consumed"] = True
         elif _detect_override(user_message):
             # Per-slot pivot: only clear the attribute slot(s) the new message explicitly
@@ -1097,20 +1406,56 @@ class Agent:
             for key in list(state["slots"]):
                 if key in new_slots:
                     state["slots"].pop(key, None)
+            # "Ignore my earlier preference" invalidates the initial preference, not
+            # every independently confirmed answer that followed it.  Evidence is stored
+            # chronologically, so discard the initial item and preserve later material /
+            # feature answers.  A full reset above remains the only operation that clears
+            # everything.
+            if state["evidence"]:
+                state["evidence"] = state["evidence"][1:]
+            state["shown_ids"].clear()
+            state["questions_asked"].clear()
             state["override_consumed"] = True
         state["slots"].update(new_slots)
+        if new_evidence:
+            normalized = new_evidence.lower()
+            if all(item.lower() != normalized for item in state["evidence"]):
+                state["evidence"].append(new_evidence)
+                state["evidence"] = state["evidence"][-6:]
 
         slots = state["slots"]
+        evidence_context = "\n".join(state["evidence"])
 
         # --- Intent router (Buying vs Browsing) ---------------------------------
-        # Buyers constrain with specifics; browsers explore. We bias fusion weights
-        # toward the slot/filter side for buying and toward dense exploration otherwise.
-        buying_signals = ("need", "want", "looking for", "buy", "require", "must", "size", "material", "color")
-        intent = "buying" if any(sig in user_message.lower() for sig in buying_signals) or slots else "browsing"
+        # Route from the current accumulated state. An explicit exploration statement
+        # wins even when it contains a broad category ("looking for shirts, still
+        # exploring"); supplying a concrete constraint moves the session to Buying.
+        intent = _route_intent(
+            user_message,
+            slots,
+            evidence=state["evidence"],
+            previous=state["intent"],
+        )
         state["intent"] = intent
 
+        session_terms: list[str] = []
+        for value in list(slots.values()) + list(state["evidence"]):
+            for term in _terms(_text(value)):
+                if term not in session_terms:
+                    session_terms.append(term)
+        state["distilled_context"] = " ".join(
+            list(dict.fromkeys(state["profile_terms"] + session_terms))[:32]
+        )
+
         # --- Hybrid retrieval + fusion ------------------------------------------
-        candidates = self._retrieve(user_message, top_k, slots)
+        candidates = self._retrieve(
+            user_message,
+            top_k,
+            slots,
+            context=evidence_context,
+            intent=intent,
+            profile_context=" ".join(state["profile_terms"]),
+        )
 
         # --- Ask-vs-recommend policy (deterministic, computed before any LLM) ---
         pool_size = len(candidates)
@@ -1127,12 +1472,24 @@ class Agent:
         # --- Grounded rerank (select from candidates only) ----------------------
         # Cost control: the LLM reranker runs only on the recommend branch, so a
         # session does not pay an LLM call on every clarifying turn.
+        ranking_requirements = dict(slots)
+        if evidence_context:
+            ranking_requirements["free_text_constraints"] = list(state["evidence"])
+        ranking_requirements["route"] = intent
+        if state["distilled_context"]:
+            ranking_requirements["distilled_context"] = state["distilled_context"]
         ranked_ids, usage = self._rerank(
-            candidates, slots, use_llm=should_recommend, recent_turns=list(state["recent_turns"])
+            candidates,
+            ranking_requirements,
+            use_llm=should_recommend,
+            recent_turns=list(state["recent_turns"]),
         )
 
+        slate = self._novel_slate(ranked_ids, state["shown_ids"], top_k)
+        state["shown_ids"].update(slate)
+
         if should_recommend:
-            recommendations = [{"parent_asin": asin} for asin in ranked_ids[:top_k]]
+            recommendations = [{"parent_asin": asin} for asin in slate]
             return {
                 "message": "Here are the best matches based on what you've told me.",
                 "ask_attribute": None,
@@ -1141,11 +1498,16 @@ class Agent:
             }
 
         # --- Ask branch ---------------------------------------------------------
-        ask_attribute = self._choose_ask_attribute(candidates, state["questions_asked"])
+        profile_tags = state["user_profile"].get("preference_tags") or []
+        if not isinstance(profile_tags, list):
+            profile_tags = []
+        ask_attribute = self._choose_ask_attribute(
+            candidates, state["questions_asked"], [str(tag) for tag in profile_tags]
+        )
         if ask_attribute not in ALLOWED_ASK_ATTRIBUTES:
             ask_attribute = "other"
         state["questions_asked"].append(ask_attribute)
-        recommendations = [{"parent_asin": asin} for asin in ranked_ids[:top_k]]
+        recommendations = [{"parent_asin": asin} for asin in slate]
         return {
             "message": self._compose_question(ask_attribute),
             "ask_attribute": ask_attribute,
