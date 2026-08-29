@@ -14,8 +14,8 @@ already hit. These tests pin the two root causes that were fixed:
 
 Assertions:
   * Every buying session that flipped from a baseline hit to a v2.0.0 miss now hits
-    again (the 12 recovered cases; `public_0190` is a documented expected-fail
-    residual where the hybrid ranks the target just below pure-BM25's #1).
+    again (the 13 recovered cases, including the former reserved `public_0190` residual
+    that the re-fitted fusion weights (v2.9.0) pulled back above the top-10).
   * No returned `parent_asin` falls outside the frozen catalog (grounding).
   * A benign "I don't have a preference" reply does not clear dialogue slots.
 """
@@ -57,10 +57,10 @@ RECOVERED = [
     ("public_0160", "B01AAANF2Y"),
     ("public_0168", "B08YYHDJD1"),
     ("public_0193", "B07YM55NLW"),
+    # Former residual: the v2.0.0 hybrid ranked this just below top-10 on turn 1. The
+    # v2.9.0 re-fitted fusion weights now lift the target into the top-10.
+    ("public_0190", "B01MQUDPPO"),
 ]
-# Residual: hybrid dense+BM25 ranks this target just below top-10 on turn 1, whereas
-# the baseline's pure-BM25 happened to rank it #1. Still flips from the old pipeline.
-RESIDUAL = [("public_0190", "B01MQUDPPO")]
 
 
 @pytest.fixture(scope="module")
@@ -120,19 +120,6 @@ def test_flipped_buying_sessions_hit_again(loaded, sample_id, target):
         loaded["agent"], sample, loaded["catalog_ids"], loaded["categories"], loaded["products"]
     )
     assert hit, f"buying session {sample_id} regressed again (target {target} not found within 10 turns)"
-
-
-@pytest.mark.parametrize("sample_id,target", RESIDUAL)
-def test_known_residual_buying_miss(loaded, sample_id, target):
-    """Document the single residual miss (expected-fail until a later task)."""
-    sample = loaded["samples"][sample_id]
-    hit, _turn = _run_session(
-        loaded["agent"], sample, loaded["catalog_ids"], loaded["categories"], loaded["products"]
-    )
-    if not hit:
-        pytest.xfail(
-            f"residual: {sample_id} target {target} ranked below top-10 by the hybrid on turn 1"
-        )
 
 
 def test_benign_negation_does_not_clear_slots(loaded):
