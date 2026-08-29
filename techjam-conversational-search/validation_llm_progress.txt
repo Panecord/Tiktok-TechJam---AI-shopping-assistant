@@ -1,1 +1,1 @@
-200/200 done | elapsed=5942s | eta=0s | llm_calls=206 | hits=111 | hr=0.555
+90/200 done | elapsed=2830s | eta=3459s | llm_calls=95 | hits=51 | hr=0.567
