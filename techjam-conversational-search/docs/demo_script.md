@@ -21,7 +21,7 @@ Use this as a concise video outline, not as a claim that the video has already b
 4. **Intent override (30 seconds):** say “Actually, blue instead of red” or another clear
    pivot and show that the affected preference changes while other evidence remains.
 5. **Grounding and metrics (25 seconds):** show that results contain catalog ASINs and show
-   the checked-in 200/200 result, MRR `0.939048`, Technical Score `0.935214`, and zero
+   the checked-in 200/200 result, MRR `0.948458`, Technical Score `0.938237`, and zero
    model tokens/API cost.
 6. **Limitations and close (10 seconds):** state that public results do not guarantee private
    performance and mention the underdetermined near-duplicate case.

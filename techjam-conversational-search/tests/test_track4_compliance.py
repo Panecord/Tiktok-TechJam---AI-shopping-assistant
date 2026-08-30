@@ -134,3 +134,12 @@ def test_precision_slate_expands_and_restarts_after_an_intent_pivot() -> None:
     assert Agent._precision_slate_limit(buying, 7, 10) == 10
     assert Agent._precision_slate_limit(browsing, 4, 10) == 2
     assert Agent._precision_slate_limit(pivot, 8, 10) == 2
+
+
+def test_explicit_slate_rejection_immediately_restores_top_k_recall() -> None:
+    rejected = {
+        "initial_route": "browsing",
+        "pivot_seen": False,
+        "slate_rejected": True,
+    }
+    assert Agent._precision_slate_limit(rejected, 2, 10) == 10

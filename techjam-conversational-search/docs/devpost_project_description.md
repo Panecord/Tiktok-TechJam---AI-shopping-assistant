@@ -49,10 +49,10 @@ works when network access and credentials are unavailable.
 On the untouched 200-session public set:
 
 - Hit Rate@10: 1.0 (200/200)
-- MRR: 0.939048
-- MTTC: 3.325 turns
-- Efficiency: 0.7675
-- Recommended Technical Score: 0.935214
+- MRR: 0.948458
+- MTTC: 3.315 turns
+- Efficiency: 0.7685
+- Recommended Technical Score: 0.938237
 - Model tokens: 0
 - Estimated API cost: $0 for the validated run
 
@@ -67,7 +67,7 @@ across ten turns without repeating the same products or allowing a pivot to eras
 constraints. Durable free-text evidence, scoped slot updates, route-aware fusion, candidate
 memory, exact-evidence recall, constraint-source consistency, durable category context, and
 precision-first expanding slates improved public Hit Rate@10 from 0.65 to 1.0 and MRR to
-0.939048 while keeping the system offline and grounded. Every returned ASIN is validated
+0.948458 while keeping the system offline and grounded. Every returned ASIN is validated
 against the frozen catalog.
 
 ## Limitations

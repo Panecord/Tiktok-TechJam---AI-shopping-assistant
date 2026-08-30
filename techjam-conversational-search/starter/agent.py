@@ -49,7 +49,7 @@ from typing import Any
 # Version marker ΓÇö makes it obvious this file supersedes the baseline.
 # ---------------------------------------------------------------------------
 # Updated with AI
-VERSION = "2.12.0"
+VERSION = "2.12.1"
 UPDATED_NOTE = (
     "UPDATED: this file supersedes the weak stateless BM25 starter (v1.0.0). "
     "Adds hybrid retrieval, dialogue state tracking, grounded reranking, and a "
@@ -364,7 +364,7 @@ FUSION_WEIGHTS = {
     "price": 0.0,
     "bias": -3.5,
 }
-EVIDENCE_BOOST_WEIGHT = 5.0
+EVIDENCE_BOOST_WEIGHT = 6.0
 # Candidate-source consistency and durable category context are intentionally separate
 # from generic evidence coverage. A joint public-dev sweep selected this balance.
 CARD_CONSISTENCY_BOOST = 25.0
@@ -375,8 +375,13 @@ CATEGORY_CONTEXT_BOOST = 7.5
 # top_k for recall. Buying can stay precise longer because its opening message carries a
 # hard constraint. An intent pivot starts a shorter new precision epoch.
 BUYING_SLATE_SCHEDULE = {1: 1, 2: 1, 3: 1, 4: 1, 5: 2, 6: 5}
-BROWSING_SLATE_SCHEDULE = {1: 1, 2: 1, 3: 1, 4: 2, 5: 5}
+BROWSING_SLATE_SCHEDULE = {1: 1, 2: 1, 3: 1, 4: 2, 5: 4}
 PIVOT_SLATE_SCHEDULE = {1: 1, 2: 1, 3: 2}
+
+SLATE_REJECTION_RE = re.compile(
+    r"\b(?:not\s+quite\s+right|none\s+of\s+(?:these|those)|different\s+options|show\s+me\s+others)\b",
+    re.I,
+)
 
 # Track 4 requires distinct Buying and Browsing routes.  Both remain hybrid for recall,
 # but Buying emphasizes lexical/constraint precision while Browsing emphasizes semantic
@@ -1408,6 +1413,8 @@ class Agent:
     @staticmethod
     def _precision_slate_limit(state: dict[str, Any], turn: int, top_k: int) -> int:
         """Return the evidence-aware slate size for this clarification epoch."""
+        if state.get("slate_rejected"):
+            return top_k
         if state.get("pivot_seen"):
             epoch_turn = int(state.get("precision_epoch_turn") or 1)
             return min(top_k, PIVOT_SLATE_SCHEDULE.get(epoch_turn, top_k))
@@ -1767,6 +1774,7 @@ class Agent:
             "initial_route": None,
             "pivot_seen": False,
             "precision_epoch_turn": 0,
+            "slate_rejected": False,
         }
 
     def respond(
@@ -1781,6 +1789,7 @@ class Agent:
             raise RuntimeError("reset must be called before respond")
         state = self._sessions[session_id]
         state["turn"] = turn
+        state["slate_rejected"] = bool(SLATE_REJECTION_RE.search(user_message))
         full_reset_message = _is_full_reset(user_message)
         override_message = _detect_override(user_message)
         pivot_message = full_reset_message or override_message

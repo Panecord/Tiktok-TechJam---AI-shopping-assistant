@@ -40,13 +40,13 @@ that still require a human-provided link or name.
 
 ## Validated public result
 
-The deterministic v2.12.0 run on all 200 released development sessions produces:
+The deterministic v2.12.1 run on all 200 released development sessions produces:
 
 - Hit Rate@10: `1.0` (200/200)
-- MRR: `0.939048`
-- MTTC: `3.325`
-- Efficiency: `0.7675`
-- Technical Score: `0.935214`
+- MRR: `0.948458`
+- MTTC: `3.315`
+- Efficiency: `0.7685`
+- Technical Score: `0.938237`
 - Reported model tokens and API cost: `0`
 
 Buying, Browsing, boundary, and intent-override Hit Rate@10 are all `1.0`.

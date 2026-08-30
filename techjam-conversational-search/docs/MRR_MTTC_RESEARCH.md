@@ -9,13 +9,13 @@ import evaluator code, public labels, sample IDs, or target ASINs.
 
 The strongest validated offline configuration is:
 
-| Metric | v2.11.0 | v2.12.0 |
+| Metric | v2.11.0 | v2.12.1 |
 |---|---:|---:|
 | Hit Rate@10 | `1.0` | `1.0` |
-| MRR | `0.583518` | `0.939048` |
-| MTTC | `2.70` | `3.325` |
-| Efficiency | `0.83` | `0.7675` |
-| Technical Score | `0.841055` | `0.935214` |
+| MRR | `0.583518` | `0.948458` |
+| MTTC | `2.70` | `3.315` |
+| Efficiency | `0.83` | `0.7685` |
+| Technical Score | `0.841055` | `0.938237` |
 | Model tokens | `0` | `0` |
 
 The deliberate MTTC increase buys a much larger MRR gain: early turns show a single
@@ -37,7 +37,7 @@ The requested targets are not mutually consistent:
 - `MTTC = 1.0` implies `Efficiency = 1.0`, not `0.95`.
 - `HitRate = 1`, `MRR = 1`, and `Efficiency = 0.95` imply Technical Score `0.99`, not
   `0.95`.
-- At v2.12's `Efficiency = 0.7675`, Technical Score `0.95` would require MRR `0.988333`.
+- At v2.12.1's `Efficiency = 0.7685`, Technical Score `0.95` would require MRR `0.987667`.
 
 MTTC `1.0` is also impossible under the released evaluator. Thirty intent-override
 sessions ignore recommendations until their mandatory pivot: 12 pivot on turn 3 and 18
@@ -75,11 +75,13 @@ rank 8 or 10 before another question can disambiguate it. v2.12 exposes fewer it
 clarifying, without marking withheld products as shown:
 
 - Buying: `1, 1, 1, 1, 2, 5, 10...`
-- Browsing: `1, 1, 1, 2, 5, 10...`
+- Browsing: `1, 1, 1, 2, 4, 10...`
 - After a pivot: `1, 1, 2, 10...`
 
 This remains contract-compliant: the API specifies a maximum result count, and every item
-is grounded in the catalog. It also preserves 200/200 public recall.
+is grounded in the catalog. It also preserves 200/200 public recall. v2.12.1 immediately
+restores Top 10 when the shopper explicitly rejects the current slate, avoiding another
+low-information precision turn.
 
 ### 4. Existing recall safeguards retained
 
@@ -95,6 +97,7 @@ slots, dual Buying/Browsing routes, scoped state updates, and pivot resets remai
 | One result for every turn | `0.495` | `0.495` | `6.915` | `0.477700` | Rejected: destroys recall |
 | Two early hero turns, then 10 | `1.0` | `0.831510` | `2.835` | `0.912753` | Superseded |
 | Route/pivot-aware expanding slate | `1.0` | `0.939048` | `3.325` | `0.935214` | Selected |
+| v2.12.1 evidence + rejection-aware refinement | `1.0` | `0.948458` | `3.315` | `0.938237` | Current |
 | Ask feature before material | `1.0` | `0.630948` | `2.41` | `0.861084` | Rejected |
 | Ask color before feature | `1.0` | `0.615996` | `2.55` | `0.853799` | Rejected |
 
@@ -150,5 +153,5 @@ python -m evaluator.local_evaluator
 python -m pytest -q
 ```
 
-The checked-in `results.json` is the complete v2.12 public run. Public development metrics
+The checked-in `results.json` is the complete v2.12.1 public run. Public development metrics
 are optimization evidence, not a private-set guarantee.
