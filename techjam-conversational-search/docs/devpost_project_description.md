@@ -1,7 +1,5 @@
 # Devpost Project Description Draft
 
-Replace every bracketed field before submission.
-
 ## Project name
 
 Shopping Copilot — Track 4 Conversational E-Commerce Search
@@ -39,7 +37,9 @@ the affected state without discarding unrelated confirmed preferences.
 - Validation tools: organizer local evaluator; optional pytest and scikit-learn diagnostics
 - Dataset: the frozen 50,000-item Amazon Reviews 2023 Clothing, Shoes and Jewelry catalog
   supplied for the challenge; attribution is documented in `DATA_ATTRIBUTION.md`
-- Development tools: [LIST THE EDITOR, AI ASSISTANTS, AND OTHER TOOLS ACTUALLY USED]
+- Development tools: Claude Code, using a custom `shopping-copilot-dev` skill
+  (`.github/skills/shopping-copilot-dev/`) that encodes the Track 4 technical spec and
+  Agent API contract; git/GitHub for version control and PR review
 
 The validated submission uses the offline TF-IDF route and no external API. It therefore
 works when network access and credentials are unavailable.
@@ -92,13 +92,34 @@ development/model dependencies are listed in `requirements.txt`.
 
 ## Demo video
 
-[PASTE THE PUBLIC YOUTUBE URL]
+[PASTE THE PUBLIC YOUTUBE URL — pending video recording/upload, see docs/demo_script.md]
 
 ## Team contributions
 
-- [NAME]: [SPECIFIC DESIGN, IMPLEMENTATION, TESTING, DOCUMENTATION, OR DEMO WORK]
-- [NAME]: [SPECIFIC CONTRIBUTION]
+- Iman D: Set up the repo and built the core architecture from scratch — the
+  system that tells apart someone who's just browsing from someone who
+  already knows what they want, and sends each down a different path. Also
+  built the part that remembers what a shopper said earlier and checks it
+  against real catalog text, and taught the matcher that "faux leather" and
+  "polyurethane" mean the same thing. Most of the early groundwork on
+  retrieval quality traces back to this work.
+
+- Rahul Sivakumar: Spent a while debugging why the agent kept asking
+  unnecessary questions instead of just recommending — turned out it was
+  checking the wrong number under the hood, so the "confident enough"
+  threshold could basically never trigger. Fixed that, then tuned how much
+  weight a BM25 rank should carry so a big gap between rank 1 and rank 30
+  doesn't drown out other signals. Also caught a bug where certain
+  materials weren't being picked up from what shoppers typed.
+
+- Tan Ah Kow: Tackled the trickiest failure mode left — cases where the
+  right product had already come up earlier in the conversation but got
+  lost once the shopper said something that changed the query. Built a
+  memory layer that holds onto recently seen candidates and can pull them
+  back when that happens. Followed up with a few rounds of scoring
+  refinements and a final tuning pass to squeeze out more ranking quality
+  without breaking anything that already worked.
 
 ## Source repository
 
-[PASTE THE PUBLIC REPOSITORY URL]
+https://github.com/Panecord/Tiktok-TechJam---AI-shopping-assistant
