@@ -1,0 +1,657 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Shopping Copilot — Results</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0B0E14;
+    --panel: #12161F;
+    --panel-2: #171C27;
+    --ink: #F2EFE9;
+    --muted: #7B8494;
+    --amber: #E8A33D;
+    --amber-dim: #6b5228;
+    --cyan: #5EC8D8;
+    --line: #262C3A;
+    --good: #7FBF7F;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: 'Space Grotesk', sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .mono { font-family: 'IBM Plex Mono', monospace; }
+  .wrap {
+    max-width: 1040px;
+    margin: 0 auto;
+    padding: 56px 32px 80px;
+  }
+
+  /* ---------- Header ---------- */
+  .eyebrow {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--amber);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .eyebrow::before {
+    content: "";
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--amber);
+    box-shadow: 0 0 10px 2px var(--amber-dim);
+  }
+  h1 {
+    font-size: 40px;
+    line-height: 1.1;
+    margin: 14px 0 6px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+  .sub {
+    color: var(--muted);
+    font-size: 15px;
+    max-width: 560px;
+    line-height: 1.5;
+  }
+  .tags { display: flex; gap: 8px; margin-top: 22px; flex-wrap: wrap; }
+  .tag {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    padding: 5px 10px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    color: var(--muted);
+    letter-spacing: 0.03em;
+  }
+  .tag.on { color: var(--good); border-color: #2c4a2c; }
+
+  /* ---------- Receipt hero ---------- */
+  .receipt {
+    margin-top: 44px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    position: relative;
+    padding: 30px 32px 22px;
+  }
+  .receipt::before, .receipt::after {
+    content: "";
+    position: absolute;
+    left: 0; right: 0;
+    height: 10px;
+    background:
+      radial-gradient(circle at 8px 0, transparent 6px, var(--bg) 6.5px) repeat-x;
+    background-size: 16px 10px;
+  }
+  .receipt::before { top: -1px; transform: rotate(180deg); }
+  .receipt::after { bottom: -1px; }
+  .receipt-title {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+    border-bottom: 1px dashed var(--line);
+    padding-bottom: 14px;
+    margin-bottom: 18px;
+    display: flex;
+    justify-content: space-between;
+  }
+  .metrics-row {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 4px;
+  }
+  .metric {
+    padding: 6px 10px 6px 0;
+    border-right: 1px dashed var(--line);
+  }
+  .metric:last-child { border-right: none; }
+  .metric-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 8px;
+  }
+  .metric-value {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 27px;
+    font-weight: 600;
+    color: var(--amber);
+    font-variant-numeric: tabular-nums;
+  }
+  .metric-value.cyan { color: var(--cyan); }
+
+  /* ---------- Section shared ---------- */
+  .section { margin-top: 56px; }
+  .section-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 18px;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 10px;
+  }
+  .section-head h2 {
+    font-size: 15px;
+    font-weight: 600;
+    margin: 0;
+    letter-spacing: -0.01em;
+  }
+  .section-head .idx {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  /* ---------- Before/after bars ---------- */
+  .compare { display: flex; flex-direction: column; gap: 22px; }
+  .compare-row {
+    display: grid;
+    grid-template-columns: 120px 1fr 90px;
+    align-items: center;
+    gap: 16px;
+  }
+  .compare-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .bar-track {
+    position: relative;
+    height: 22px;
+    background: var(--panel-2);
+    border-radius: 3px;
+    overflow: hidden;
+    border: 1px solid var(--line);
+  }
+  .bar-fill {
+    position: absolute; left: 0; top: 0; bottom: 0;
+    width: 0%;
+    border-radius: 3px 0 0 3px;
+    transition: width 1.1s cubic-bezier(.16,.8,.3,1);
+  }
+  .bar-fill.base { background: linear-gradient(90deg, #4a3a24, var(--amber-dim)); }
+  .bar-fill.final { background: linear-gradient(90deg, var(--amber-dim), var(--amber)); }
+  .bar-fill.final.cyan-fill { background: linear-gradient(90deg, #245a63, var(--cyan)); }
+  .compare-val {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    text-align: right;
+    color: var(--ink);
+  }
+  .compare-legend {
+    display: flex; gap: 22px;
+    margin-top: 4px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .dot { width: 8px; height: 8px; border-radius: 2px; display: inline-block; margin-right: 6px; position: relative; top: 1px; }
+
+  /* ---------- Scenario grid ---------- */
+  .scenario-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 14px;
+  }
+  .scenario-card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 18px 16px;
+    transition: border-color .2s, transform .2s;
+  }
+  .scenario-card:hover { border-color: var(--amber-dim); transform: translateY(-2px); }
+  .scenario-name {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 2px;
+  }
+  .scenario-n {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    color: var(--muted);
+    margin-bottom: 14px;
+  }
+  .scenario-stat {
+    display: flex;
+    justify-content: space-between;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    padding: 5px 0;
+    border-top: 1px dashed var(--line);
+  }
+  .scenario-stat span:first-child { color: var(--muted); }
+  .scenario-stat span:last-child { color: var(--ink); }
+
+  /* ---------- Architecture manifest ---------- */
+  .manifest { display: flex; flex-direction: column; }
+  .manifest-row {
+    display: grid;
+    grid-template-columns: 26px 1fr auto;
+    align-items: center;
+    gap: 14px;
+    padding: 13px 0;
+    border-top: 1px solid var(--line);
+  }
+  .manifest-row:last-child { border-bottom: 1px solid var(--line); }
+  .check {
+    width: 18px; height: 18px;
+    border-radius: 4px;
+    background: #1c2a1c;
+    border: 1px solid #2c4a2c;
+    color: var(--good);
+    font-size: 12px;
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'IBM Plex Mono', monospace;
+  }
+  .manifest-name { font-size: 13.5px; }
+  .manifest-status {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    color: var(--good);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .receipt-note {
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px dashed var(--line);
+    font-size: 11px;
+    color: var(--muted);
+    line-height: 1.6;
+  }
+
+  /* ---------- Histogram ---------- */
+  .hist {
+    display: flex;
+    align-items: flex-end;
+    gap: 14px;
+    height: 150px;
+    padding: 0 4px;
+  }
+  .hist-bar {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-end;
+    height: 100%;
+    position: relative;
+  }
+  .hist-count {
+    font-size: 11px;
+    color: var(--muted);
+    margin-bottom: 6px;
+  }
+  .hist-fill {
+    width: 100%;
+    height: 0%;
+    background: linear-gradient(180deg, var(--amber), var(--amber-dim));
+    border-radius: 3px 3px 0 0;
+    transition: height 1s cubic-bezier(.16,.8,.3,1);
+  }
+  .hist-label {
+    margin-top: 10px;
+    font-size: 11px;
+    color: var(--muted);
+    border-top: 1px solid var(--line);
+    width: 100%;
+    text-align: center;
+    padding-top: 8px;
+  }
+
+  /* ---------- Decision cards ---------- */
+  .decision-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
+  .decision-card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 16px 18px;
+  }
+  .decision-card.decision-win { border-color: var(--amber-dim); }
+  .decision-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px dashed var(--line);
+  }
+  .decision-name { font-size: 13.5px; font-weight: 600; }
+  .decision-badge {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--bg);
+    background: var(--amber);
+    padding: 3px 8px;
+    border-radius: 3px;
+  }
+  .decision-badge-off {
+    color: var(--muted);
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+  }
+  .decision-note {
+    margin-top: 16px;
+    font-size: 12.5px;
+    line-height: 1.6;
+    color: var(--muted);
+    max-width: 720px;
+  }
+
+  footer {
+    margin-top: 60px;
+    padding-top: 20px;
+    border-top: 1px solid var(--line);
+    display: flex;
+    justify-content: space-between;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    color: var(--muted);
+    letter-spacing: 0.03em;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="eyebrow">Track 4 &mdash; Conversational Commerce</div>
+  <h1>Shopping Copilot<br>Results &amp; Insights</h1>
+  <p class="sub">Deterministic multi-turn retrieval agent, evaluated on the 200-session
+    public development set. No model calls required to reach these numbers.</p>
+  <div class="tags">
+    <span class="tag on">v2.12.1</span>
+    <span class="tag on">0 LLM tokens</span>
+    <span class="tag on">fully offline</span>
+    <span class="tag on">byte-identical rerun</span>
+    <span class="tag">200 / 200 sessions</span>
+    <span class="tag">96 tests · 95 pass / 1 skip</span>
+  </div>
+
+  <!-- Receipt hero -->
+  <div class="receipt">
+    <div class="receipt-title"><span>final&nbsp;results.json</span><span>public set · n=200</span></div>
+    <div class="metrics-row">
+      <div class="metric">
+        <div class="metric-label">Hit Rate@10</div>
+        <div class="metric-value" data-target="1.000" data-decimals="3">0.000</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">MRR</div>
+        <div class="metric-value" data-target="0.948" data-decimals="3">0.000</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">MTTC</div>
+        <div class="metric-value cyan" data-target="3.315" data-decimals="3">0.000</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Efficiency</div>
+        <div class="metric-value" data-target="0.769" data-decimals="3">0.000</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Technical Score</div>
+        <div class="metric-value" data-target="0.938" data-decimals="3">0.000</div>
+      </div>
+    </div>
+    <div class="receipt-note mono">
+      0.938 / 0.992 theoretical ceiling &middot; 94.6% &mdash; the ceiling itself is
+      bounded below 1.0 by 30 sessions with a mandatory turn-3/4 intent pivot, not by
+      agent quality
+    </div>
+  </div>
+
+  <!-- Baseline vs Final -->
+  <div class="section">
+    <div class="section-head">
+      <h2>Baseline &rarr; Final</h2>
+      <span class="idx">weak BM25 starter vs. v2.12.1</span>
+    </div>
+    <div class="compare">
+      <div class="compare-row">
+        <div class="compare-label">Hit Rate@10</div>
+        <div>
+          <div class="bar-track"><div class="bar-fill base" data-width="12.5"></div></div>
+        </div>
+        <div class="compare-val">0.125</div>
+      </div>
+      <div class="compare-row">
+        <div class="compare-label"></div>
+        <div>
+          <div class="bar-track"><div class="bar-fill final" data-width="100"></div></div>
+        </div>
+        <div class="compare-val">1.000</div>
+      </div>
+
+      <div class="compare-row" style="margin-top:6px">
+        <div class="compare-label">MRR</div>
+        <div>
+          <div class="bar-track"><div class="bar-fill base" data-width="6.8"></div></div>
+        </div>
+        <div class="compare-val">0.068</div>
+      </div>
+      <div class="compare-row">
+        <div class="compare-label"></div>
+        <div>
+          <div class="bar-track"><div class="bar-fill final" data-width="94.8"></div></div>
+        </div>
+        <div class="compare-val">0.948</div>
+      </div>
+
+      <div class="compare-row" style="margin-top:6px">
+        <div class="compare-label">Technical Score</div>
+        <div>
+          <div class="bar-track"><div class="bar-fill base cyan-fill" data-width="10.7"></div></div>
+        </div>
+        <div class="compare-val">0.107*</div>
+      </div>
+      <div class="compare-row">
+        <div class="compare-label"></div>
+        <div>
+          <div class="bar-track"><div class="bar-fill final cyan-fill" data-width="93.8"></div></div>
+        </div>
+        <div class="compare-val">0.938</div>
+      </div>
+    </div>
+    <div class="compare-legend">
+      <span><span class="dot" style="background:var(--amber-dim)"></span>weak BM25 baseline</span>
+      <span><span class="dot" style="background:var(--amber)"></span>v2.12.1 (this agent)</span>
+      <span>* baseline Technical Score computed from the official scoring formula; not separately reported</span>
+    </div>
+  </div>
+
+  <!-- Scenario grid -->
+  <div class="section">
+    <div class="section-head">
+      <h2>Per-Scenario Breakdown</h2>
+      <span class="idx">all four groups reach Hit Rate@10 = 1.0</span>
+    </div>
+    <div class="scenario-grid">
+      <div class="scenario-card">
+        <div class="scenario-name">Buying</div>
+        <div class="scenario-n mono">n = 80 sessions</div>
+        <div class="scenario-stat"><span>Hit Rate@10</span><span>1.000</span></div>
+        <div class="scenario-stat"><span>MRR</span><span>0.974</span></div>
+        <div class="scenario-stat"><span>MTTC</span><span>2.74</span></div>
+      </div>
+      <div class="scenario-card">
+        <div class="scenario-name">Browsing</div>
+        <div class="scenario-n mono">n = 80 sessions</div>
+        <div class="scenario-stat"><span>Hit Rate@10</span><span>1.000</span></div>
+        <div class="scenario-stat"><span>MRR</span><span>0.931</span></div>
+        <div class="scenario-stat"><span>MTTC</span><span>3.25</span></div>
+      </div>
+      <div class="scenario-card">
+        <div class="scenario-name">Intent Override</div>
+        <div class="scenario-n mono">n = 30 sessions</div>
+        <div class="scenario-stat"><span>Hit Rate@10</span><span>1.000</span></div>
+        <div class="scenario-stat"><span>MRR</span><span>0.934</span></div>
+        <div class="scenario-stat"><span>MTTC</span><span>4.63</span></div>
+      </div>
+      <div class="scenario-card">
+        <div class="scenario-name">Boundary</div>
+        <div class="scenario-n mono">n = 10 sessions</div>
+        <div class="scenario-stat"><span>Hit Rate@10</span><span>1.000</span></div>
+        <div class="scenario-stat"><span>MRR</span><span>0.925</span></div>
+        <div class="scenario-stat"><span>MTTC</span><span>4.50</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Turn-to-resolution -->
+  <div class="section">
+    <div class="section-head">
+      <h2>Turn-to-Resolution</h2>
+      <span class="idx">first hit, by turn &middot; cap is 10</span>
+    </div>
+    <div class="hist">
+      <div class="hist-bar"><div class="hist-fill" data-h="15.6"></div><div class="hist-count mono">10</div><div class="hist-label mono">1</div></div>
+      <div class="hist-bar"><div class="hist-fill" data-h="89.1"></div><div class="hist-count mono">57</div><div class="hist-label mono">2</div></div>
+      <div class="hist-bar"><div class="hist-fill" data-h="100"></div><div class="hist-count mono">64</div><div class="hist-label mono">3</div></div>
+      <div class="hist-bar"><div class="hist-fill" data-h="51.6"></div><div class="hist-count mono">33</div><div class="hist-label mono">4</div></div>
+      <div class="hist-bar"><div class="hist-fill" data-h="20.3"></div><div class="hist-count mono">13</div><div class="hist-label mono">5</div></div>
+      <div class="hist-bar"><div class="hist-fill" data-h="23.4"></div><div class="hist-count mono">15</div><div class="hist-label mono">6</div></div>
+      <div class="hist-bar"><div class="hist-fill" data-h="7.8"></div><div class="hist-count mono">5</div><div class="hist-label mono">7</div></div>
+      <div class="hist-bar"><div class="hist-fill" data-h="3.1"></div><div class="hist-count mono">2</div><div class="hist-label mono">8</div></div>
+      <div class="hist-bar"><div class="hist-fill" data-h="1.6"></div><div class="hist-count mono">1</div><div class="hist-label mono">9</div></div>
+    </div>
+    <div class="compare-legend" style="margin-top:16px">
+      <span>65.5% of sessions resolved within 3 turns</span>
+      <span>88.5% within 5 turns</span>
+      <span>longest resolution: turn 9, still inside budget</span>
+    </div>
+  </div>
+
+  <!-- Offline vs LLM decision -->
+  <div class="section">
+    <div class="section-head">
+      <h2>Why the Offline Route</h2>
+      <span class="idx">a tested, rejected alternative</span>
+    </div>
+    <div class="decision-grid">
+      <div class="decision-card decision-win">
+        <div class="decision-head">
+          <span class="decision-name">TF-IDF &middot; deterministic</span>
+          <span class="decision-badge">submitted</span>
+        </div>
+        <div class="scenario-stat"><span>Technical Score</span><span>0.938</span></div>
+        <div class="scenario-stat"><span>Total tokens</span><span>0</span></div>
+        <div class="scenario-stat"><span>Est. API cost</span><span>$0.00</span></div>
+        <div class="scenario-stat"><span>Needs network?</span><span>no</span></div>
+      </div>
+      <div class="decision-card">
+        <div class="decision-head">
+          <span class="decision-name">+ grounded LLM rerank</span>
+          <span class="decision-badge decision-badge-off">tested, not used</span>
+        </div>
+        <div class="scenario-stat"><span>Technical Score</span><span>0.446</span></div>
+        <div class="scenario-stat"><span>Total tokens</span><span>161,362</span></div>
+        <div class="scenario-stat"><span>Est. API cost</span><span>&gt; $0</span></div>
+        <div class="scenario-stat"><span>Needs network?</span><span>yes</span></div>
+      </div>
+    </div>
+    <p class="decision-note">Listwise LLM reranking is implemented and covered by
+      <span class="mono">tests/test_llm_rerank.py</span>, but underperforms the
+      deterministic route on this catalog while adding cost, latency, and a network
+      dependency. The submission uses the offline path because it's both the stronger
+      and the cheaper result &mdash; not a fallback.</p>
+  </div>
+
+  <!-- Architecture manifest -->
+  <div class="section">
+    <div class="section-head">
+      <h2>Core Pillars</h2>
+      <span class="idx">Track 4 compliance audit</span>
+    </div>
+    <div class="manifest">
+      <div class="manifest-row">
+        <div class="check">&#10003;</div>
+        <div class="manifest-name">Dual-track Buying / Browsing intent routing</div>
+        <div class="manifest-status">Implemented</div>
+      </div>
+      <div class="manifest-row">
+        <div class="check">&#10003;</div>
+        <div class="manifest-name">Multi-route retrieval + semantic ranking (BM25 &middot; dense &middot; RRF fusion)</div>
+        <div class="manifest-status">Implemented</div>
+      </div>
+      <div class="manifest-row">
+        <div class="check">&#10003;</div>
+        <div class="manifest-name">Dynamic dialogue state &amp; intent-override handling</div>
+        <div class="manifest-status">Implemented</div>
+      </div>
+      <div class="manifest-row">
+        <div class="check">&#10003;</div>
+        <div class="manifest-name">Proactive, answerability-aware clarification policy</div>
+        <div class="manifest-status">Implemented</div>
+      </div>
+      <div class="manifest-row">
+        <div class="check">&#10003;</div>
+        <div class="manifest-name">Dynamic context programming (short + long-term evidence)</div>
+        <div class="manifest-status">Implemented</div>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    <span>Shopping Copilot &middot; TikTok TechJam 2026 &middot; Track 4</span>
+    <span>for demo-video use only &middot; not part of submitted repository</span>
+  </footer>
+
+</div>
+
+<script>
+  // Count-up animation for hero metrics, and bar-fill on load.
+  function animateValue(el, target, decimals, duration) {
+    const start = performance.now();
+    function frame(now) {
+      const t = Math.min(1, (now - start) / duration);
+      const eased = 1 - Math.pow(1 - t, 3);
+      const val = target * eased;
+      el.textContent = val.toFixed(decimals);
+      if (t < 1) requestAnimationFrame(frame);
+      else el.textContent = target.toFixed(decimals);
+    }
+    requestAnimationFrame(frame);
+  }
+
+  window.addEventListener('load', () => {
+    document.querySelectorAll('.metric-value').forEach((el, i) => {
+      const target = parseFloat(el.getAttribute('data-target'));
+      const decimals = parseInt(el.getAttribute('data-decimals'), 10);
+      setTimeout(() => animateValue(el, target, decimals, 900), i * 90);
+    });
+    setTimeout(() => {
+      document.querySelectorAll('.bar-fill').forEach((el) => {
+        el.style.width = el.getAttribute('data-width') + '%';
+      });
+      document.querySelectorAll('.hist-fill').forEach((el) => {
+        el.style.height = el.getAttribute('data-h') + '%';
+      });
+    }, 250);
+  });
+</script>
+</body>
+</html>
