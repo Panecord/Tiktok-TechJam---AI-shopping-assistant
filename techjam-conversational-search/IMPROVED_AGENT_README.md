@@ -1,7 +1,15 @@
-# Improved Agent — Track 4 Shopping Copilot (v2.10.0)
+# Improved Agent — Track 4 Shopping Copilot (v2.11.0)
 
 > **Updated with AI.** This document describes the upgraded `starter/agent.py` that
 > replaces the weak, stateless BM25 baseline (v1.0.0) shipped with the challenge.
+>
+> **v2.11.0 (restored recall layer):** applies the previously validated candidate-memory
+> recovery design on top of the current v2.10 synonym-aware dual-route agent. A bounded
+> historical beam is re-scored after long-evidence query drift, while an exact-substring
+> evidence route restores catalog products dropped by tokenized BM25/TF-IDF retrieval.
+> The two-to-one live/recall blend preserves ranking quality. Result: **Hit Rate@10 `1.0`
+> (200/200)**, MRR `0.583518`, MTTC `2.70`, and Technical Score **`0.841055`**, with zero
+> model tokens.
 >
 > **v2.10.0 (Iteration 7, dual-route + evidence):** the largest single jump yet — HR@10
 > `0.715 → 0.995`, score `0.6095 → 0.8382`. Built on top of v2.9.0 (synonyms + re-fit
@@ -132,8 +140,9 @@
 | `v2.8.0` | **Ask-attribute reachability + LLM context.** `_choose_ask_attribute` now skips `budget` and `category` (guaranteed dead-end asks: the simulator never discloses a constraint classed `budget`/`category`), and registers non-recognized materials (denim, linen, jewelry metals, …) under `feature` via `EVALUATOR_RECOGNIZED_MATERIALS` so the entropy selector can reach them. `recent_turns` (last 3 user turns) added to the LLM rerank prompt per spec §2. | HR@10 `0.630 -> 0.650`, MRR `0.4556 -> 0.4787`, MTTC `7.555 -> 6.470`, score `0.5206 -> 0.5592` |
 | `v2.9.0` | **Synonym-aware matching + re-fitted fusion weights + test coverage.** (a) Static `_COLOR_SYNONYMS` / `_MATERIAL_SYNONYMS` checked before base vocab (extraction + slot-match). (b) Learned fusion weights re-fitted by 5-fold session CV (mean AUC `0.8054`): bm25 `2.61 -> 4.24`, dense `11.34 -> 0.71`. (c) `_bm25_query` de-duplication. (d) `public_0190` residual resolved. (e) Isolated unit tests for policy / `_choose_ask_attribute` / `_bm25_query` / synonyms. (f) `_validate_llm.py` parallelized (code only). (g) Pool-recall re-check: `0.965` vs HR@10 `0.715` (ranking bottleneck). | HR@10 `0.650 -> 0.715`, MRR `0.4787 -> 0.4938`, MTTC `6.470 -> 5.805`, Efficiency `0.453 -> 0.5195`, score `0.5592 -> 0.6095` |
 | `v2.10.0` | **Dual-route intent + free-text evidence.** `_route_intent` + `ROUTE_RRF_WEIGHTS` (Buying = bm25/slot precision, Browsing = dense/profile diversity); `_extract_constraint_evidence` + `_evidence_match_score` with `EVIDENCE_BOOST_WEIGHT=3.0`; `_profile_terms` anonymized profile context; `ANSWERABILITY_PRIORITY` + profile tie-breakers in `_choose_ask_attribute`; scoped-reply slot protection; `_novel_slate`. v2.9.0 synonyms + re-fit weights retained. | HR@10 `0.715 -> 0.995`, MRR `0.4938 -> 0.58419`, MTTC `5.805 -> 2.73`, Efficiency `0.5195 -> 0.827`, score `0.6095 -> 0.8382` |
+| `v2.11.0` | **Candidate-memory + exact-evidence recall.** Keeps a bounded prior beam, re-scores it with current evidence, clears it on pivots/resets, and adds a grounded exact-substring recall route with a two-live-to-one-recall blend. | HR@10 `0.995 -> 1.0` (200/200), MRR `0.583518`, MTTC `2.70`, Efficiency `0.83`, score `0.841055`; every scenario HR `1.0` |
 
-> The next improvement will be `v2.11.0`.
+> The next improvement will be `v2.12.0`.
 
 ## 1. Summary of What Changed
 
@@ -152,6 +161,7 @@ user turn
   -> candidate fusion (reciprocal-rank fusion + slot-aware re-scoring)
   -> dialogue state update (slot extraction + overwrite-on-override)
   -> grounded rerank (select-from-candidates-only; optional LLM hook)
+  -> candidate-memory + exact-evidence recall routes
   -> ask-vs-recommend policy (deterministic threshold rule)
   -> turn-budget guard (force convergence by turn 9)
 ```
@@ -171,28 +181,29 @@ user turn
 | 9 | Attribute-driven questions | never asks | asks the attribute that best splits the pool |
 | 10 | Optional LLM rerank | none | optional, env-var gated, validated |
 | 11 | Honest token reporting | 0/0 | 0/0 when no LLM (real counts when used) |
+| 12 | Multi-turn recall recovery | none | bounded prior beam + grounded exact-evidence route |
 
 ## 2. Metrics — Baseline vs. Upgraded
 
 Measured on the **200-session public dev set** via `python -m evaluator.local_evaluator`
 (the evaluator and public labels are untouched).
 
-| Metric | Baseline (BM25) | Upgraded (v2.0.0) | Upgraded (v2.1.0) | Upgraded (v2.6.0) | Upgraded (v2.7.0) | Upgraded (v2.8.0) | Upgraded (v2.9.0) | Upgraded (v2.10.0) |
-|--------|-----------------|-------------------|-------------------|-------------------|-------------------|-------------------|-------------------|-------------------|
-| Hit Rate@10 | `0.125` | `0.225` | `0.515` | `0.545` | `0.630` | `0.650` | `0.715` | **`0.995`** |
-| MRR | `0.068034` | `0.068581` | `0.349196` | `0.422623` | `0.455567` | `0.478685` | `0.493812` | **`0.58419`** |
-| MTTC | `9.81` | `9.30` | `8.21` | `8.255` | `7.555` | `6.470` | `5.805` | **`2.73`** |
-| Efficiency | `0.119` | `0.17` | `0.279` | `0.2745` | `0.3445` | `0.453` | `0.5195` | **`0.827`** |
-| **Technical Score** | `0.10671` | `0.167074` | `0.418059` | `0.454187` | `0.520570` | `0.559206` | `0.609544` | **`0.838157`** |
+| Metric | Baseline | v2.7.0 | v2.8.0 | v2.9.0 | v2.10.0 | Current v2.11.0 |
+|--------|----------|--------|--------|--------|---------|-----------------|
+| Hit Rate@10 | `0.125` | `0.630` | `0.650` | `0.715` | `0.995` | **`1.0`** |
+| MRR | `0.068034` | `0.455567` | `0.478685` | `0.493812` | `0.58419` | **`0.583518`** |
+| MTTC | `9.81` | `7.555` | `6.470` | `5.805` | `2.73` | **`2.70`** |
+| Efficiency | `0.119` | `0.3445` | `0.453` | `0.5195` | `0.827` | **`0.83`** |
+| **Technical Score** | `0.10671` | `0.520570` | `0.559206` | `0.609544` | `0.838157` | **`0.841055`** |
 
 Scenario breakdown (from `results.json`):
 
-| Scenario | Baseline HR@10 | Upgraded (v2.0.0) | Upgraded (v2.1.0) | Upgraded (v2.6.0) | Upgraded (v2.7.0) | Upgraded (v2.8.0) | Upgraded (v2.9.0) | Upgraded (v2.10.0) |
-|----------|----------------|-------------------|-------------------|-------------------|-------------------|-------------------|-------------------|
-| buying | `0.2375` | `0.225` | `0.5` | `0.5` | `0.6375` | `0.625` | `0.7375` | **`0.9875`** |
-| browsing | `0.025` | `0.2625` | `0.525` | `0.5625` | `0.6125` | `0.6625` | `0.7125` | **`1.0`** |
-| intent_override | `0.1333` | `0.1667` | `0.4667` | `0.5333` | `0.6` | `0.6` | `0.6` | **`1.0`** |
-| boundary | `0.0` | `0.1` | `0.7` | `0.8` | `0.8` | `0.9` | `0.9` | **`1.0`** |
+| Scenario | Baseline HR@10 | v2.10.0 | Current v2.11.0 | Current MRR | Current MTTC |
+|----------|----------------|---------|-----------------|-------------|--------------|
+| buying | `0.2375` | `0.9875` | **`1.0`** | `0.518586` | `2.0375` |
+| browsing | `0.025` | `1.0` | **`1.0`** | `0.579802` | `2.60` |
+| intent_override | `0.1333` | `1.0` | **`1.0`** | `0.701085` | `4.266667` |
+| boundary | `0.0` | `1.0` | **`1.0`** | `0.78` | `4.10` |
 
 The largest gains come from the **browsing** and **intent_override** scenarios, which were
 near-zero for the baseline because it never asked questions and never handled pivots.
@@ -242,6 +253,12 @@ Each session (keyed by `session_id`) carries persistent state in `self._sessions
     "turn": int,
     "questions_asked": [...],       # attributes already asked (avoids repeats)
     "override_consumed": bool,
+    "recent_turns": [...],          # bounded optional-LLM context
+    "evidence": [...],              # durable arbitrary constraints
+    "shown_ids": set(...),          # avoids repeated slates
+    "profile_terms": [...],         # bounded anonymized preferences
+    "candidate_memory": [...],      # bounded prior retrieval beam
+    "candidate_memory_features": {},
 }
 ```
 
@@ -253,6 +270,8 @@ Each session (keyed by `session_id`) carries persistent state in `self._sessions
   ...), the previously-set attribute slots are cleared **before** the new values are
   written. This is the special handling for the **Intent Override** scenario and prevents
   a pivot from being merged as if it were additive.
+- **Recall-memory reset:** intent pivots and explicit full resets also clear the historical
+  candidate beam, preventing products from an obsolete intent entering the new slate.
 
 ### 3.4 Hybrid retrieval + fusion (§3)
 
@@ -267,6 +286,16 @@ Each session (keyed by `session_id`) carries persistent state in `self._sessions
 5. **Slot-aware boost** is added to each candidate based on how well it satisfies the
    current slot constraints (`_slot_match_score`).
 6. The result is capped to a bounded pool (default `FUSED_POOL = 300`).
+
+For long catalog-specific evidence, v2.11 adds two grounded recovery paths:
+
+1. **Candidate memory:** up to 900 earlier retrieved products retain their strongest
+   lexical/dense features and are re-scored using current slots, price, and evidence.
+2. **Exact-evidence recall:** the complete normalized phrase is matched against cached
+   catalog text, preserving punctuation-heavy feature structure lost by tokenization.
+
+The live+memory ranking is interleaved, then the exact route receives one position for every
+two primary results. Every recovery candidate still comes from `self.products`.
 
 Every ASIN in the returned pool is validated against `self.products` (grounding guarantee).
 
@@ -283,8 +312,8 @@ This score is used both as a fusion boost and by the deterministic reranker.
 
 ### 3.6 Grounded rerank (§5)
 
-`_rerank()` is **grounded** — it can only ever return ASINs that are already in the
-candidate pool built by `_retrieve()`.
+`_rerank()` is **grounded**: deterministic and optional-LLM results are restricted to the
+live pool, while the memory and exact-evidence routes are restricted to prior/catalog IDs.
 
 - **Default — deterministic:** `_rerank_deterministic()` re-orders the candidate pool by
   descending slot-match score. It never invents an ID.
@@ -335,7 +364,9 @@ All constants live at module top-level in `starter/agent.py` and are tuned again
 | `MARGIN_THRESHOLD` | `0.20` | relative margin between top-2 scores for "confident" |
 | `FORCE_RECOMMEND_TURN` | `9` | turn at which we force a recommendation |
 | `USE_LEARNED_FUSION` | `True` | use the learned logistic-regression fusion weights (False = hand-tuned fallback) |
-| `FUSION_WEIGHTS` | `{bm25:2.61, dense:11.34, slot:2.04, price:0.0, bias:-4.65}` | learned fusion weights (fitted on the public dev set) |
+| `FUSION_WEIGHTS` | `{bm25:4.2429, dense:0.7117, slot:2.6878, price:0.0, bias:-8.9584}` | five-fold mean weights fitted on the public development set |
+| `MEMORY_POOL_CAP` | `900` | maximum grounded candidates retained across turns |
+| `MEMORY_MIN_EVIDENCE_CHARS` | `40` | minimum evidence length that activates memory/exact recall |
 | `LLM_TOP` | `25` | candidate pool size passed to the LLM reranker (trimmed upstream) |
 | `DEFAULT_EMBED_MODEL` | `all-MiniLM-L6-v2` | pretrained sentence-embedding model used for dense retrieval (via `COPILOT_EMBED_MODEL`) |
 
@@ -408,3 +439,6 @@ python -m evaluator.local_evaluator
 - `usage` is `0` unless an LLM is configured; enabling the LLM requires a compatible
   chat-completion endpoint and does not improve the core metric unless it reorders candidates
   more accurately than the deterministic reranker.
+- The public result is 200/200, but this is a development-set result, not a private-set
+  guarantee. Indistinguishable groups larger than the ten-turn Top-10 budget remain an
+  information limit when the shopper never discloses a unique title, saying, or brand.

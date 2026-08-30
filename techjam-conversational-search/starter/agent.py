@@ -49,7 +49,7 @@ from typing import Any
 # Version marker ΓÇö makes it obvious this file supersedes the baseline.
 # ---------------------------------------------------------------------------
 # Updated with AI
-VERSION = "2.8.1"
+VERSION = "2.11.0"
 UPDATED_NOTE = (
     "UPDATED: this file supersedes the weak stateless BM25 starter (v1.0.0). "
     "Adds hybrid retrieval, dialogue state tracking, grounded reranking, and a "
@@ -333,6 +333,12 @@ ROUTE_RRF_WEIGHTS = {
 K_SMALL = 25             # candidate_pool_size <= K_SMALL => consider recommending
 MARGIN_THRESHOLD = 0.20  # relative margin between top-2 fused scores => confident
 FORCE_RECOMMEND_TURN = 9
+
+# Preserve a bounded earlier retrieval beam when a later, long catalog-specific answer
+# causes the live query to drift toward widely copied boilerplate. The memory route is
+# label-independent and contains only products retrieved from the frozen catalog.
+MEMORY_POOL_CAP = 900
+MEMORY_MIN_EVIDENCE_CHARS = 40
 
 # Optional LLM reranker configuration (read from environment, never committed).
 LLM_URL_ENV = "COPILOT_LLM_URL"
@@ -653,6 +659,7 @@ class Agent:
         self._build_catalog()
         self._build_bm25_index()
         self._build_dense_index()
+        self._exact_evidence_cache: dict[str, list[str]] = {}
         # Session state: session_id -> slot/intent/turn state.
         self._sessions: dict[str, dict] = {}
 
@@ -1247,6 +1254,133 @@ class Agent:
         repeated = [asin for asin in ranked_ids if asin in shown_ids]
         return (unseen + repeated)[:top_k]
 
+    @staticmethod
+    def _interleave_rankings(primary: list[str], secondary: list[str]) -> list[str]:
+        """Fairly merge live and memory routes while preserving each route's order."""
+        merged: list[str] = []
+        seen: set[str] = set()
+        for index in range(max(len(primary), len(secondary))):
+            for ranking in (primary, secondary):
+                if index < len(ranking) and ranking[index] not in seen:
+                    seen.add(ranking[index])
+                    merged.append(ranking[index])
+        return merged
+
+    @staticmethod
+    def _blend_recall_route(primary: list[str], recall: list[str]) -> list[str]:
+        """Blend two primary results for each exact-evidence recall result."""
+        merged: list[str] = []
+        seen: set[str] = set()
+        primary_index = 0
+        recall_index = 0
+        while primary_index < len(primary) or recall_index < len(recall):
+            for _ in range(2):
+                if primary_index < len(primary):
+                    asin = primary[primary_index]
+                    primary_index += 1
+                    if asin not in seen:
+                        seen.add(asin)
+                        merged.append(asin)
+            if recall_index < len(recall):
+                asin = recall[recall_index]
+                recall_index += 1
+                if asin not in seen:
+                    seen.add(asin)
+                    merged.append(asin)
+        return merged
+
+    def _exact_evidence_candidates(self, requirements: dict[str, Any]) -> list[str]:
+        """Retrieve products containing a long shopper phrase as an exact substring.
+
+        BM25 and TF-IDF intentionally tokenize punctuation-heavy feature text, but doing so
+        can discard the very product that supplied a verbatim catalog constraint. This
+        bounded third route restores phrase structure and is still fully catalog-grounded.
+        """
+        raw_evidence = requirements.get("free_text_constraints") or []
+        evidence = [raw_evidence] if isinstance(raw_evidence, str) else raw_evidence
+        phrases = [
+            re.sub(r"\s+", " ", str(value)).strip().lower()
+            for value in evidence
+            if len(str(value)) >= MEMORY_MIN_EVIDENCE_CHARS
+        ]
+        if not phrases:
+            return []
+
+        match_counts: dict[str, int] = defaultdict(int)
+        for phrase in phrases:
+            cached = self._exact_evidence_cache.get(phrase)
+            if cached is None:
+                cached = [
+                    asin for asin in self.order
+                    if phrase in self._searchable_lc.get(asin, "")
+                ]
+                self._exact_evidence_cache[phrase] = cached
+            for asin in cached:
+                match_counts[asin] += 1
+
+        ranked = sorted(
+            match_counts,
+            key=lambda asin: (
+                match_counts[asin],
+                self._slot_match_score(asin, requirements),
+                -self.id_to_idx[asin],
+            ),
+            reverse=True,
+        )
+        return ranked[:MEMORY_POOL_CAP]
+
+    def _merge_candidate_memory(
+        self,
+        live_ranked: list[str],
+        live_candidates: list[str],
+        prior_candidates: list[str],
+        prior_features: dict[str, list[float]],
+        requirements: dict[str, Any],
+    ) -> list[str]:
+        """Re-score a prior beam with new evidence and merge it with live retrieval.
+
+        Long copied product text can make a later bag-of-words query less discriminative
+        than the shopper's earlier category query. Candidate memory prevents that query
+        drift from irreversibly discarding earlier plausible products. It activates only
+        for long evidence and remains strictly grounded in prior catalog retrieval.
+        """
+        raw_evidence = requirements.get("free_text_constraints") or []
+        evidence = [raw_evidence] if isinstance(raw_evidence, str) else raw_evidence
+        if not any(len(str(value)) >= MEMORY_MIN_EVIDENCE_CHARS for value in evidence):
+            return live_ranked
+
+        live_set = set(live_candidates)
+        memory_candidates = [asin for asin in prior_candidates if asin not in live_set]
+        if not memory_candidates:
+            return live_ranked
+        memory_set = set(memory_candidates)
+
+        saved_features = self._candidate_features
+        saved_fused = self._last_fused
+        saved_max_fused = self._last_max_fused
+        try:
+            self._candidate_features = {
+                asin: [
+                    feature[0],
+                    feature[1],
+                    self._slot_match_score(asin, requirements),
+                    self._price_similarity(self.products[asin], requirements),
+                ]
+                for asin, feature in prior_features.items()
+                if asin in self.products and asin in memory_set
+            }
+            self._last_fused = {}
+            self._last_max_fused = 1.0
+            memory_ranked = self._rerank_deterministic(memory_candidates, requirements)
+        finally:
+            self._candidate_features = saved_features
+            self._last_fused = saved_fused
+            self._last_max_fused = saved_max_fused
+
+        if hasattr(self, "_last_route"):
+            self._last_route["memory_candidates_used"] = len(memory_ranked)
+        return self._interleave_rankings(live_ranked, memory_ranked)
+
     # -- Grounded rerank (deterministic default; optional LLM hook) ---------------
     def _rerank_deterministic(self, candidate_list: list[str], slots: dict[str, Any]) -> list[str]:
         """Re-rank by fused relevance + a slot-aware boost (selects from candidates only)."""
@@ -1462,6 +1596,8 @@ class Agent:
             "user_profile": safe_profile,
             "profile_terms": profile_terms,
             "distilled_context": " ".join(profile_terms),
+            "candidate_memory": [],
+            "candidate_memory_features": {},
         }
 
     def respond(
@@ -1508,6 +1644,8 @@ class Agent:
             state["evidence"].clear()
             state["shown_ids"].clear()
             state["questions_asked"].clear()
+            state["candidate_memory"].clear()
+            state["candidate_memory_features"].clear()
             state["override_consumed"] = True
         elif _detect_override(user_message):
             # Per-slot pivot: only clear the attribute slot(s) the new message explicitly
@@ -1525,6 +1663,8 @@ class Agent:
                 state["evidence"] = state["evidence"][1:]
             state["shown_ids"].clear()
             state["questions_asked"].clear()
+            state["candidate_memory"].clear()
+            state["candidate_memory_features"].clear()
             state["override_consumed"] = True
         state["slots"].update(new_slots)
         if new_evidence:
@@ -1558,6 +1698,11 @@ class Agent:
         )
 
         # --- Hybrid retrieval + fusion ------------------------------------------
+        prior_candidates = list(state["candidate_memory"])
+        prior_features = {
+            asin: list(feature)
+            for asin, feature in state["candidate_memory_features"].items()
+        }
         candidates = self._retrieve(
             user_message,
             top_k,
@@ -1566,6 +1711,25 @@ class Agent:
             intent=intent,
             profile_context=" ".join(state["profile_terms"]),
         )
+        # Keep the strongest lexical/dense evidence observed for each prior candidate.
+        # Slot and price features are recomputed from current dialogue state on reuse.
+        for asin in candidates:
+            current_feature = list(self._candidate_features[asin])
+            previous_feature = state["candidate_memory_features"].get(asin)
+            if previous_feature is None:
+                state["candidate_memory"].append(asin)
+                state["candidate_memory_features"][asin] = current_feature
+            else:
+                previous_feature[0] = max(previous_feature[0], current_feature[0])
+                previous_feature[1] = max(previous_feature[1], current_feature[1])
+        if len(state["candidate_memory"]) > MEMORY_POOL_CAP:
+            state["candidate_memory"] = state["candidate_memory"][:MEMORY_POOL_CAP]
+            keep = set(state["candidate_memory"])
+            state["candidate_memory_features"] = {
+                asin: feature
+                for asin, feature in state["candidate_memory_features"].items()
+                if asin in keep
+            }
 
         # --- Ask-vs-recommend policy (deterministic, computed before any LLM) ---
         # Updated with AI: pool_size must reflect how narrow the CONSTRAINT-SATISFYING
@@ -1603,6 +1767,17 @@ class Agent:
             use_llm=should_recommend,
             recent_turns=list(state["recent_turns"]),
         )
+        ranked_ids = self._merge_candidate_memory(
+            ranked_ids,
+            candidates,
+            prior_candidates,
+            prior_features,
+            ranking_requirements,
+        )
+        exact_evidence_ranked = self._exact_evidence_candidates(ranking_requirements)
+        if exact_evidence_ranked:
+            ranked_ids = self._blend_recall_route(ranked_ids, exact_evidence_ranked)
+            self._last_route["exact_evidence_candidates_used"] = len(exact_evidence_ranked)
 
         slate = self._novel_slate(ranked_ids, state["shown_ids"], top_k)
         state["shown_ids"].update(slate)

@@ -1,10 +1,10 @@
 {
   "sample_count": 200,
-  "hit_rate_at_10": 0.995,
-  "mrr": 0.58419,
-  "mttc": 2.73,
-  "efficiency": 0.827,
-  "recommended_technical_score": 0.838157,
+  "hit_rate_at_10": 1.0,
+  "mrr": 0.583518,
+  "mttc": 2.7,
+  "efficiency": 0.83,
+  "recommended_technical_score": 0.841055,
   "reported_token_usage": {
     "prompt_tokens": 0,
     "completion_tokens": 0,
@@ -20,14 +20,14 @@
     "browsing": {
       "sample_count": 80,
       "hit_rate_at_10": 1.0,
-      "mrr": 0.582629,
-      "mttc": 2.5625
+      "mrr": 0.579802,
+      "mttc": 2.6
     },
     "buying": {
       "sample_count": 80,
-      "hit_rate_at_10": 0.9875,
-      "mrr": 0.51744,
-      "mttc": 2.15
+      "hit_rate_at_10": 1.0,
+      "mrr": 0.518586,
+      "mttc": 2.0375
     },
     "intent_override": {
       "sample_count": 30,
@@ -192,10 +192,10 @@
     {
       "sample_id": "public_0020",
       "scenario_type": "buying",
-      "hit": false,
-      "first_hit_turn": null,
-      "best_rank": null,
-      "reciprocal_rank": 0.0
+      "hit": true,
+      "first_hit_turn": 2,
+      "best_rank": 6,
+      "reciprocal_rank": 0.16666666666666666
     },
     {
       "sample_id": "public_0021",
@@ -641,9 +641,9 @@
       "sample_id": "public_0076",
       "scenario_type": "browsing",
       "hit": true,
-      "first_hit_turn": 3,
-      "best_rank": 7,
-      "reciprocal_rank": 0.14285714285714285
+      "first_hit_turn": 6,
+      "best_rank": 6,
+      "reciprocal_rank": 0.16666666666666666
     },
     {
       "sample_id": "public_0077",
@@ -786,8 +786,8 @@
       "scenario_type": "buying",
       "hit": true,
       "first_hit_turn": 3,
-      "best_rank": 5,
-      "reciprocal_rank": 0.2
+      "best_rank": 8,
+      "reciprocal_rank": 0.125
     },
     {
       "sample_id": "public_0095",
@@ -834,8 +834,8 @@
       "scenario_type": "browsing",
       "hit": true,
       "first_hit_turn": 3,
-      "best_rank": 4,
-      "reciprocal_rank": 0.25
+      "best_rank": 6,
+      "reciprocal_rank": 0.16666666666666666
     },
     {
       "sample_id": "public_0101",
@@ -1394,8 +1394,8 @@
       "scenario_type": "browsing",
       "hit": true,
       "first_hit_turn": 3,
-      "best_rank": 2,
-      "reciprocal_rank": 0.5
+      "best_rank": 3,
+      "reciprocal_rank": 0.3333333333333333
     },
     {
       "sample_id": "public_0171",
