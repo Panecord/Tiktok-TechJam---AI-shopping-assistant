@@ -11,7 +11,7 @@ that still require a human-provided link or name.
 | Dual-track Buying/Browsing routing | `_route_intent()` identifies exploration and concrete constraints. `_retrieve()` uses route-specific BM25/dense weights; Buying prioritizes verified slot matches, while Browsing adds anonymized profile context to semantic retrieval. | Implemented |
 | Multi-route retrieval and semantic ranking | In-memory SQLite FTS5 BM25 and TF-IDF cosine retrieval feed reciprocal-rank fusion and a learned deterministic reranker. Sentence embeddings and a grounded listwise LLM are opt-in. | Implemented |
 | Dynamic state and intent override | Per-session slots, durable free-text evidence, recent turns, shown products, question history, per-slot overwrite, and explicit full reset live in `starter/agent.py`. | Implemented |
-| Proactive clarification | The deterministic ask/recommend policy asks answerability-aware, non-repeating attribute questions when confidence is low, then forces convergence within the turn budget. | Implemented |
+| Proactive clarification | The deterministic ask/recommend policy asks answerability-aware, non-repeating attribute questions when confidence is low. Precision-first slates expand from one hero result toward Top 10 as evidence accumulates. | Implemented |
 | Dynamic context programming | Long-term profile terms, short-term constraints, and a bounded prior candidate beam are stored separately and re-orchestrated every turn. Long exact evidence can recover products lost to query drift. | Implemented |
 
 ## Constraints and evaluation
@@ -40,13 +40,13 @@ that still require a human-provided link or name.
 
 ## Validated public result
 
-The deterministic v2.11.0 run on all 200 released development sessions produces:
+The deterministic v2.12.0 run on all 200 released development sessions produces:
 
 - Hit Rate@10: `1.0` (200/200)
-- MRR: `0.583518`
-- MTTC: `2.70`
-- Efficiency: `0.83`
-- Technical Score: `0.841055`
+- MRR: `0.939048`
+- MTTC: `3.325`
+- Efficiency: `0.7675`
+- Technical Score: `0.935214`
 - Reported model tokens and API cost: `0`
 
 Buying, Browsing, boundary, and intent-override Hit Rate@10 are all `1.0`.

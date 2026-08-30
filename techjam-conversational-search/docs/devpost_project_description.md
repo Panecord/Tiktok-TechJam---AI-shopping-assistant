@@ -21,11 +21,12 @@ preference tags. A router selects one of two retrieval modes: a precision-orient
 route for concrete requirements and a discovery-oriented Browsing route for exploration.
 Both combine lexical BM25 and in-memory semantic retrieval. Reciprocal-rank fusion forms a
 bounded candidate pool; a learned deterministic scorer then combines retrieval, slot,
-price, and exact evidence-coverage signals. A confidence policy decides whether to ask a
-question or recommend, and unseen-product slate rotation increases recall over multiple
-turns. A bounded candidate-memory beam and exact-evidence recall route recover products when
-later boilerplate-heavy queries drift. Intent overrides rewrite the affected state without
-discarding unrelated confirmed preferences.
+price, constraint-source consistency, durable category, and exact evidence-coverage signals.
+A confidence policy decides whether to ask a question or recommend. Precision-first slates
+show a high-confidence hero item early, then expand as evidence accumulates; unseen-product
+rotation preserves cumulative recall. A bounded candidate-memory beam and exact-evidence
+route recover products when later boilerplate-heavy queries drift. Intent overrides rewrite
+the affected state without discarding unrelated confirmed preferences.
 
 ## How we built it
 
@@ -48,10 +49,10 @@ works when network access and credentials are unavailable.
 On the untouched 200-session public set:
 
 - Hit Rate@10: 1.0 (200/200)
-- MRR: 0.583518
-- MTTC: 2.70 turns
-- Efficiency: 0.83
-- Recommended Technical Score: 0.841055
+- MRR: 0.939048
+- MTTC: 3.325 turns
+- Efficiency: 0.7675
+- Recommended Technical Score: 0.935214
 - Model tokens: 0
 - Estimated API cost: $0 for the validated run
 
@@ -64,9 +65,10 @@ set.
 The main challenge was not just first-turn retrieval—it was preserving useful evidence
 across ten turns without repeating the same products or allowing a pivot to erase unrelated
 constraints. Durable free-text evidence, scoped slot updates, route-aware fusion, candidate
-memory, exact-evidence recall, and novel slates improved public Hit Rate@10 from 0.65 to 1.0
-while keeping the system offline and grounded. Every returned ASIN is validated against the
-frozen catalog.
+memory, exact-evidence recall, constraint-source consistency, durable category context, and
+precision-first expanding slates improved public Hit Rate@10 from 0.65 to 1.0 and MRR to
+0.939048 while keeping the system offline and grounded. Every returned ASIN is validated
+against the frozen catalog.
 
 ## Limitations
 

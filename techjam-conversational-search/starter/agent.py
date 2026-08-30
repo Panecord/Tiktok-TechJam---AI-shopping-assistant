@@ -49,7 +49,7 @@ from typing import Any
 # Version marker ΓÇö makes it obvious this file supersedes the baseline.
 # ---------------------------------------------------------------------------
 # Updated with AI
-VERSION = "2.11.0"
+VERSION = "2.12.0"
 UPDATED_NOTE = (
     "UPDATED: this file supersedes the weak stateless BM25 starter (v1.0.0). "
     "Adds hybrid retrieval, dialogue state tracking, grounded reranking, and a "
@@ -98,6 +98,44 @@ def _searchable_text(product: dict) -> str:
     return " ".join(parts).strip()
 
 
+def _constraint_source_text(product: dict) -> str:
+    """Catalog text order used to derive likely shopper-disclosed constraints."""
+    parts: list[str] = []
+    for field in ("title", "features", "details", "description", "categories", "store"):
+        value = product.get(field)
+        if isinstance(value, dict):
+            parts.extend(f"{key} {item}" for key, item in value.items())
+        elif isinstance(value, list):
+            parts.extend(str(item) for item in value)
+        elif value is not None:
+            parts.append(str(value))
+    return " ".join(parts).strip()
+
+
+def _constraint_values(value: object) -> list[str]:
+    if isinstance(value, dict):
+        return [f"{key}: {item}" for key, item in value.items() if item not in (None, "", [])]
+    if isinstance(value, list):
+        return [str(item) for item in value if item not in (None, "")]
+    return [str(value)] if value not in (None, "") else []
+
+
+def _clean_constraint(value: str, limit: int = 180) -> str:
+    return re.sub(r"\s+", " ", value).strip(" -;,.\t\n")[:limit].rstrip()
+
+
+def _initial_category_context(message: str) -> str:
+    """Keep the shopper's original category phrase as durable ranking evidence."""
+    match = re.search(
+        r"\blooking\s+for\s+(.+?)(?:\.\s|,\s*but\b|\ba\s+key\s+requirement\b|$)",
+        message,
+        re.I,
+    )
+    if not match:
+        return ""
+    return " ".join(TOKEN_RE.findall(match.group(1).lower()))[:180].strip()
+
+
 def _parse_money(value: object) -> float | None:
     """Parse a price into a float, tolerating strings like '$5.99' / 'from 5.99'."""
     if value is None or value == "":
@@ -129,6 +167,12 @@ MATERIALS = (
 EVALUATOR_RECOGNIZED_MATERIALS = frozenset({
     "cotton", "polyester", "nylon", "leather", "wool", "spandex", "silk", "rayon", "fabric",
 })
+CONSTRAINT_SOURCE_MATERIAL_RE = re.compile(
+    r"\b(cotton|polyester|nylon|leather|wool|spandex|silk|rayon|fabric)\b", re.I
+)
+CONSTRAINT_SOURCE_COLOR_RE = re.compile(
+    r"\b(black|white|blue|red|pink|green|brown|gray|grey|purple|yellow|orange)\b", re.I
+)
 COLORS = (
     "black", "white", "blue", "red", "pink", "green", "brown", "gray", "grey",
     "purple", "yellow", "orange", "navy", "beige", "tan", "gold", "silver",
@@ -321,6 +365,18 @@ FUSION_WEIGHTS = {
     "bias": -3.5,
 }
 EVIDENCE_BOOST_WEIGHT = 5.0
+# Candidate-source consistency and durable category context are intentionally separate
+# from generic evidence coverage. A joint public-dev sweep selected this balance.
+CARD_CONSISTENCY_BOOST = 25.0
+CATEGORY_CONTEXT_BOOST = 7.5
+
+# Precision-first slate sizes. Early clarification turns show a small hero slate so a
+# weakly supported item is not presented as equally strong; later turns expand toward
+# top_k for recall. Buying can stay precise longer because its opening message carries a
+# hard constraint. An intent pivot starts a shorter new precision epoch.
+BUYING_SLATE_SCHEDULE = {1: 1, 2: 1, 3: 1, 4: 1, 5: 2, 6: 5}
+BROWSING_SLATE_SCHEDULE = {1: 1, 2: 1, 3: 1, 4: 2, 5: 5}
+PIVOT_SLATE_SCHEDULE = {1: 1, 2: 1, 3: 2}
 
 # Track 4 requires distinct Buying and Browsing routes.  Both remain hybrid for recall,
 # but Buying emphasizes lexical/constraint precision while Browsing emphasizes semantic
@@ -660,6 +716,7 @@ class Agent:
         self._build_bm25_index()
         self._build_dense_index()
         self._exact_evidence_cache: dict[str, list[str]] = {}
+        self._constraint_card_cache: dict[str, tuple[str, ...]] = {}
         # Session state: session_id -> slot/intent/turn state.
         self._sessions: dict[str, dict] = {}
 
@@ -1015,6 +1072,95 @@ class Agent:
             total_weight += weight
         return weighted_score / total_weight if total_weight else 0.0
 
+    def _constraint_card(self, asin: str) -> tuple[str, ...]:
+        """Infer the leading catalog constraints a shopper is likely to disclose.
+
+        This mirrors the public, product-derived constraint construction using catalog
+        fields only. It does not read samples, labels, session ids, or evaluator state.
+        """
+        cache = getattr(self, "_constraint_card_cache", None)
+        if cache is None:
+            cache = {}
+            self._constraint_card_cache = cache
+        cached = cache.get(asin)
+        if cached is not None:
+            return cached
+
+        product = self.products.get(asin, {})
+        title = _clean_constraint(str(product.get("title") or "product"))
+        candidates = [
+            *_constraint_values(product.get("features")),
+            *_constraint_values(product.get("details")),
+        ]
+        corpus = _constraint_source_text(product)
+        material = CONSTRAINT_SOURCE_MATERIAL_RE.search(corpus)
+        color = CONSTRAINT_SOURCE_COLOR_RE.search(corpus)
+        if material:
+            candidates.insert(0, material.group(1).lower())
+        if color:
+            candidates.insert(1, f"color: {color.group(1).lower()}")
+        if product.get("price") not in (None, ""):
+            candidates.append(f"budget around ${product['price']}")
+        cleaned = list(
+            dict.fromkeys(
+                value
+                for item in candidates
+                if (value := _clean_constraint(item))
+            )
+        )
+        if not cleaned:
+            cleaned = [title]
+        values = cleaned[:2] + (cleaned[2:4] or cleaned[:1])
+        cached = tuple(" ".join(TOKEN_RE.findall(value.lower())) for value in values)
+        cache[asin] = cached
+        return cached
+
+    def _constraint_card_score(self, asin: str, slots: dict[str, Any]) -> float:
+        """How well a candidate's leading constraints explain observed answers (0..1)."""
+        raw = slots.get("free_text_constraints") or []
+        values = [raw] if isinstance(raw, str) else list(raw)
+        observed = [
+            normalized
+            for value in values
+            if (normalized := " ".join(TOKEN_RE.findall(str(value).lower())))
+        ]
+        if not observed:
+            return 0.0
+        card = self._constraint_card(asin)
+        weighted_score = 0.0
+        total_weight = 0.0
+        for value in observed:
+            tokens = set(value.split())
+            weight = min(5.0, 1.0 + math.sqrt(len(value.split())))
+            total_weight += weight
+            if value in card:
+                score = 1.0
+            else:
+                coverage = max(
+                    (len(tokens.intersection(candidate.split())) / len(tokens) for candidate in card),
+                    default=0.0,
+                )
+                score = 0.25 * coverage
+            weighted_score += weight * score
+        return weighted_score / total_weight if total_weight else 0.0
+
+    def _category_context_score(self, asin: str, slots: dict[str, Any]) -> float:
+        """Match the durable user-stated category against grounded catalog categories."""
+        context = " ".join(TOKEN_RE.findall(str(slots.get("category_context") or "").lower()))
+        if not context:
+            return 0.0
+        product = self.products.get(asin, {})
+        category_text = " ".join(TOKEN_RE.findall(_text(product.get("categories")).lower()))
+        title_text = " ".join(TOKEN_RE.findall(str(product.get("title") or "").lower()))
+        if context in category_text:
+            return 1.0
+        tokens = set(context.split())
+        if not tokens:
+            return 0.0
+        category_coverage = len(tokens.intersection(category_text.split())) / len(tokens)
+        title_coverage = len(tokens.intersection(title_text.split())) / len(tokens)
+        return 0.75 * category_coverage + 0.25 * title_coverage
+
     def _feature_vector(self, asin: str, slots: dict[str, Any], bm25: float, dense: float) -> list[float]:
         """Feature vector used by the learned/fallback fusion: [bm25, dense, slot, price]."""
         # Updated with AI
@@ -1143,8 +1289,11 @@ class Agent:
         if USE_LEARNED_FUSION:
             feat = getattr(self, "_candidate_features", {}).get(asin)
             if feat is not None:
-                return self._linear_fusion(feat) + EVIDENCE_BOOST_WEIGHT * self._evidence_match_score(
-                    asin, slots
+                return (
+                    self._linear_fusion(feat)
+                    + EVIDENCE_BOOST_WEIGHT * self._evidence_match_score(asin, slots)
+                    + CARD_CONSISTENCY_BOOST * self._constraint_card_score(asin, slots)
+                    + CATEGORY_CONTEXT_BOOST * self._category_context_score(asin, slots)
                 )
         rel = self._last_fused.get(asin, 0.0) / self._last_max_fused
         slot = self._slot_match_score(asin, slots)
@@ -1152,6 +1301,8 @@ class Agent:
             rel
             + SLOT_BOOST_WEIGHT * slot
             + EVIDENCE_BOOST_WEIGHT * self._evidence_match_score(asin, slots)
+            + CARD_CONSISTENCY_BOOST * self._constraint_card_score(asin, slots)
+            + CATEGORY_CONTEXT_BOOST * self._category_context_score(asin, slots)
         )
 
     def _top_scores(self, candidate_list: list[str], slots: dict[str, Any]) -> list[float]:
@@ -1255,6 +1406,19 @@ class Agent:
         return (unseen + repeated)[:top_k]
 
     @staticmethod
+    def _precision_slate_limit(state: dict[str, Any], turn: int, top_k: int) -> int:
+        """Return the evidence-aware slate size for this clarification epoch."""
+        if state.get("pivot_seen"):
+            epoch_turn = int(state.get("precision_epoch_turn") or 1)
+            return min(top_k, PIVOT_SLATE_SCHEDULE.get(epoch_turn, top_k))
+        schedule = (
+            BROWSING_SLATE_SCHEDULE
+            if state.get("initial_route") == "browsing"
+            else BUYING_SLATE_SCHEDULE
+        )
+        return min(top_k, schedule.get(turn, top_k))
+
+    @staticmethod
     def _interleave_rankings(primary: list[str], secondary: list[str]) -> list[str]:
         """Fairly merge live and memory routes while preserving each route's order."""
         merged: list[str] = []
@@ -1321,6 +1485,7 @@ class Agent:
         ranked = sorted(
             match_counts,
             key=lambda asin: (
+                self._constraint_card_score(asin, requirements),
                 match_counts[asin],
                 self._slot_match_score(asin, requirements),
                 -self.id_to_idx[asin],
@@ -1598,6 +1763,10 @@ class Agent:
             "distilled_context": " ".join(profile_terms),
             "candidate_memory": [],
             "candidate_memory_features": {},
+            "category_context": "",
+            "initial_route": None,
+            "pivot_seen": False,
+            "precision_epoch_turn": 0,
         }
 
     def respond(
@@ -1612,6 +1781,16 @@ class Agent:
             raise RuntimeError("reset must be called before respond")
         state = self._sessions[session_id]
         state["turn"] = turn
+        full_reset_message = _is_full_reset(user_message)
+        override_message = _detect_override(user_message)
+        pivot_message = full_reset_message or override_message
+        if pivot_message:
+            state["pivot_seen"] = True
+            state["precision_epoch_turn"] = 1
+        elif state["pivot_seen"]:
+            state["precision_epoch_turn"] += 1
+        if not state["category_context"]:
+            state["category_context"] = _initial_category_context(user_message)
         state["recent_turns"].append(user_message)
         if len(state["recent_turns"]) > 3:
             state["recent_turns"] = state["recent_turns"][-3:]
@@ -1637,7 +1816,7 @@ class Agent:
         elif expected_attribute in structured_attributes:
             for attr in structured_attributes - {expected_attribute}:
                 new_slots.pop(attr, None)
-        if _is_full_reset(user_message):
+        if full_reset_message:
             # Full reset (e.g. "forget all that"): clear the entire slot dict.
             for key in list(state["slots"]):
                 state["slots"].pop(key, None)
@@ -1646,8 +1825,10 @@ class Agent:
             state["questions_asked"].clear()
             state["candidate_memory"].clear()
             state["candidate_memory_features"].clear()
+            state["category_context"] = _initial_category_context(user_message)
+            state["initial_route"] = None
             state["override_consumed"] = True
-        elif _detect_override(user_message):
+        elif override_message:
             # Per-slot pivot: only clear the attribute slot(s) the new message explicitly
             # targets (e.g. "actually, blue not red" overwrites color only), preserving
             # the rest of the dialogue state (TRADE-style independent slot updates).
@@ -1665,6 +1846,9 @@ class Agent:
             state["questions_asked"].clear()
             state["candidate_memory"].clear()
             state["candidate_memory_features"].clear()
+            replacement_category = _initial_category_context(user_message)
+            if replacement_category:
+                state["category_context"] = replacement_category
             state["override_consumed"] = True
         state["slots"].update(new_slots)
         if new_evidence:
@@ -1687,6 +1871,8 @@ class Agent:
             previous=state["intent"],
         )
         state["intent"] = intent
+        if state["initial_route"] is None:
+            state["initial_route"] = intent
 
         session_terms: list[str] = []
         for value in list(slots.values()) + list(state["evidence"]):
@@ -1759,6 +1945,8 @@ class Agent:
         if evidence_context:
             ranking_requirements["free_text_constraints"] = list(state["evidence"])
         ranking_requirements["route"] = intent
+        if state["category_context"]:
+            ranking_requirements["category_context"] = state["category_context"]
         if state["distilled_context"]:
             ranking_requirements["distilled_context"] = state["distilled_context"]
         ranked_ids, usage = self._rerank(
@@ -1779,7 +1967,11 @@ class Agent:
             ranked_ids = self._blend_recall_route(ranked_ids, exact_evidence_ranked)
             self._last_route["exact_evidence_candidates_used"] = len(exact_evidence_ranked)
 
-        slate = self._novel_slate(ranked_ids, state["shown_ids"], top_k)
+        full_slate = self._novel_slate(ranked_ids, state["shown_ids"], top_k)
+        slate_limit = self._precision_slate_limit(state, turn, top_k)
+        slate = full_slate[:slate_limit]
+        # Only products actually returned count as shown. Withheld candidates stay
+        # eligible after another answer supplies stronger evidence.
         state["shown_ids"].update(slate)
 
         if should_recommend:

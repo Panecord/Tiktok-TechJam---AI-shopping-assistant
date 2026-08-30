@@ -1,7 +1,14 @@
-# Improved Agent — Track 4 Shopping Copilot (v2.11.0)
+# Improved Agent — Track 4 Shopping Copilot (v2.12.0)
 
 > **Updated with AI.** This document describes the upgraded `starter/agent.py` that
 > replaces the weak, stateless BM25 baseline (v1.0.0) shipped with the challenge.
+>
+> **v2.12.0 (rank-first precision):** adds catalog-derived constraint-source consistency,
+> durable category context, and route/pivot-aware expanding slates. The agent starts with a
+> small high-confidence hero slate, then expands toward Top 10 as evidence accumulates. On
+> all 200 public sessions this produces **Hit Rate@10 `1.0`**, MRR **`0.939048`**, MTTC
+> `3.325`, Efficiency `0.7675`, and Technical Score **`0.935214`**, with zero model tokens.
+> See `docs/MRR_MTTC_RESEARCH.md` for feasibility math, ablations, and primary research.
 >
 > **v2.11.0 (restored recall layer):** applies the previously validated candidate-memory
 > recovery design on top of the current v2.10 synonym-aware dual-route agent. A bounded
@@ -141,8 +148,9 @@
 | `v2.9.0` | **Synonym-aware matching + re-fitted fusion weights + test coverage.** (a) Static `_COLOR_SYNONYMS` / `_MATERIAL_SYNONYMS` checked before base vocab (extraction + slot-match). (b) Learned fusion weights re-fitted by 5-fold session CV (mean AUC `0.8054`): bm25 `2.61 -> 4.24`, dense `11.34 -> 0.71`. (c) `_bm25_query` de-duplication. (d) `public_0190` residual resolved. (e) Isolated unit tests for policy / `_choose_ask_attribute` / `_bm25_query` / synonyms. (f) `_validate_llm.py` parallelized (code only). (g) Pool-recall re-check: `0.965` vs HR@10 `0.715` (ranking bottleneck). | HR@10 `0.650 -> 0.715`, MRR `0.4787 -> 0.4938`, MTTC `6.470 -> 5.805`, Efficiency `0.453 -> 0.5195`, score `0.5592 -> 0.6095` |
 | `v2.10.0` | **Dual-route intent + free-text evidence.** `_route_intent` + `ROUTE_RRF_WEIGHTS` (Buying = bm25/slot precision, Browsing = dense/profile diversity); `_extract_constraint_evidence` + `_evidence_match_score` with `EVIDENCE_BOOST_WEIGHT=3.0`; `_profile_terms` anonymized profile context; `ANSWERABILITY_PRIORITY` + profile tie-breakers in `_choose_ask_attribute`; scoped-reply slot protection; `_novel_slate`. v2.9.0 synonyms + re-fit weights retained. | HR@10 `0.715 -> 0.995`, MRR `0.4938 -> 0.58419`, MTTC `5.805 -> 2.73`, Efficiency `0.5195 -> 0.827`, score `0.6095 -> 0.8382` |
 | `v2.11.0` | **Candidate-memory + exact-evidence recall.** Keeps a bounded prior beam, re-scores it with current evidence, clears it on pivots/resets, and adds a grounded exact-substring recall route with a two-live-to-one-recall blend. | HR@10 `0.995 -> 1.0` (200/200), MRR `0.583518`, MTTC `2.70`, Efficiency `0.83`, score `0.841055`; every scenario HR `1.0` |
+| `v2.12.0` | **Constraint-source reranking + durable category + precision-first slates.** Reconstructs candidate constraint cards from catalog fields, keeps the original category active after long replies, and expands route/pivot-aware slates only as confidence grows. | HR@10 `1.0`, MRR `0.583518 -> 0.939048`, MTTC `2.70 -> 3.325`, Efficiency `0.7675`, score `0.841055 -> 0.935214`; zero tokens |
 
-> The next improvement will be `v2.12.0`.
+> The next improvement will be `v2.13.0`.
 
 ## 1. Summary of What Changed
 
@@ -162,7 +170,9 @@ user turn
   -> dialogue state update (slot extraction + overwrite-on-override)
   -> grounded rerank (select-from-candidates-only; optional LLM hook)
   -> candidate-memory + exact-evidence recall routes
+  -> constraint-source + durable-category scoring
   -> ask-vs-recommend policy (deterministic threshold rule)
+  -> precision-first expanding slate
   -> turn-budget guard (force convergence by turn 9)
 ```
 
@@ -182,28 +192,29 @@ user turn
 | 10 | Optional LLM rerank | none | optional, env-var gated, validated |
 | 11 | Honest token reporting | 0/0 | 0/0 when no LLM (real counts when used) |
 | 12 | Multi-turn recall recovery | none | bounded prior beam + grounded exact-evidence route |
+| 13 | Rank-first slate control | fixed Top 10 | route/pivot-aware `1 -> 2 -> 5 -> 10` expansion |
 
 ## 2. Metrics — Baseline vs. Upgraded
 
 Measured on the **200-session public dev set** via `python -m evaluator.local_evaluator`
 (the evaluator and public labels are untouched).
 
-| Metric | Baseline | v2.7.0 | v2.8.0 | v2.9.0 | v2.10.0 | Current v2.11.0 |
+| Metric | Baseline | v2.7.0 | v2.8.0 | v2.9.0 | v2.11.0 | Current v2.12.0 |
 |--------|----------|--------|--------|--------|---------|-----------------|
-| Hit Rate@10 | `0.125` | `0.630` | `0.650` | `0.715` | `0.995` | **`1.0`** |
-| MRR | `0.068034` | `0.455567` | `0.478685` | `0.493812` | `0.58419` | **`0.583518`** |
-| MTTC | `9.81` | `7.555` | `6.470` | `5.805` | `2.73` | **`2.70`** |
-| Efficiency | `0.119` | `0.3445` | `0.453` | `0.5195` | `0.827` | **`0.83`** |
-| **Technical Score** | `0.10671` | `0.520570` | `0.559206` | `0.609544` | `0.838157` | **`0.841055`** |
+| Hit Rate@10 | `0.125` | `0.630` | `0.650` | `0.715` | `1.0` | **`1.0`** |
+| MRR | `0.068034` | `0.455567` | `0.478685` | `0.493812` | `0.583518` | **`0.939048`** |
+| MTTC | `9.81` | `7.555` | `6.470` | `5.805` | `2.70` | **`3.325`** |
+| Efficiency | `0.119` | `0.3445` | `0.453` | `0.5195` | `0.83` | **`0.7675`** |
+| **Technical Score** | `0.10671` | `0.520570` | `0.559206` | `0.609544` | `0.841055` | **`0.935214`** |
 
 Scenario breakdown (from `results.json`):
 
-| Scenario | Baseline HR@10 | v2.10.0 | Current v2.11.0 | Current MRR | Current MTTC |
+| Scenario | Baseline HR@10 | v2.11.0 | Current v2.12.0 | Current MRR | Current MTTC |
 |----------|----------------|---------|-----------------|-------------|--------------|
-| buying | `0.2375` | `0.9875` | **`1.0`** | `0.518586` | `2.0375` |
-| browsing | `0.025` | `1.0` | **`1.0`** | `0.579802` | `2.60` |
-| intent_override | `0.1333` | `1.0` | **`1.0`** | `0.701085` | `4.266667` |
-| boundary | `0.0` | `1.0` | **`1.0`** | `0.78` | `4.10` |
+| buying | `0.2375` | `1.0` | **`1.0`** | `0.971875` | `2.7625` |
+| browsing | `0.025` | `1.0` | **`1.0`** | `0.909702` | `3.25` |
+| intent_override | `0.1333` | `1.0` | **`1.0`** | `0.931667` | `4.633333` |
+| boundary | `0.0` | `1.0` | **`1.0`** | `0.933333` | `4.5` |
 
 The largest gains come from the **browsing** and **intent_override** scenarios, which were
 near-zero for the baseline because it never asked questions and never handled pivots.

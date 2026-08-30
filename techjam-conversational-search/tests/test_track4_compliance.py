@@ -1,6 +1,12 @@
 """Focused regressions for the official Track 4 routing and context pillars."""
 
-from starter.agent import Agent, ROUTE_RRF_WEIGHTS, _profile_terms, _route_intent
+from starter.agent import (
+    Agent,
+    ROUTE_RRF_WEIGHTS,
+    _initial_category_context,
+    _profile_terms,
+    _route_intent,
+)
 
 
 def test_exploration_language_routes_to_browsing_despite_category() -> None:
@@ -90,3 +96,41 @@ def test_long_verbatim_evidence_can_restore_a_dropped_catalog_product() -> None:
     agent._exact_evidence_cache = {}
     ranked = agent._exact_evidence_candidates({"free_text_constraints": [phrase]})
     assert ranked == ["dropped"]
+
+
+def test_constraint_card_prefers_the_source_of_observed_answers() -> None:
+    agent = Agent.__new__(Agent)
+    agent._constraint_card_cache = {}
+    agent.products = {
+        "source": {
+            "title": "Red cotton shirt",
+            "features": ["Machine washable", "Imported", "Pull On closure"],
+            "details": {},
+        },
+        "incidental": {
+            "title": "Red cotton shirt",
+            "features": ["Different leading feature", "Another feature", "Third feature"],
+            "details": {},
+            "description": "Machine washable",
+        },
+    }
+    requirements = {"free_text_constraints": ["cotton", "Machine washable"]}
+    assert agent._constraint_card_score("source", requirements) == 1.0
+    assert agent._constraint_card_score("incidental", requirements) < 1.0
+
+
+def test_original_category_phrase_survives_later_clarification_turns() -> None:
+    assert _initial_category_context(
+        "I'm looking for Women Shoes Boots. A key requirement is: leather."
+    ) == "women shoes boots"
+
+
+def test_precision_slate_expands_and_restarts_after_an_intent_pivot() -> None:
+    buying = {"initial_route": "buying", "pivot_seen": False}
+    browsing = {"initial_route": "browsing", "pivot_seen": False}
+    pivot = {"initial_route": "buying", "pivot_seen": True, "precision_epoch_turn": 3}
+    assert Agent._precision_slate_limit(buying, 1, 10) == 1
+    assert Agent._precision_slate_limit(buying, 6, 10) == 5
+    assert Agent._precision_slate_limit(buying, 7, 10) == 10
+    assert Agent._precision_slate_limit(browsing, 4, 10) == 2
+    assert Agent._precision_slate_limit(pivot, 8, 10) == 2

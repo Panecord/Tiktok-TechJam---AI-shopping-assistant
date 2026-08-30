@@ -43,6 +43,14 @@ class _PolicyAgent(Agent):
         self._scores: list[float] = []
 
     def _retrieve(self, message, top_k, slots, context="", intent="buying", profile_context=""):
+        # Production _retrieve() populates one feature vector per returned candidate.
+        # Keep this policy-only stub faithful to that contract so candidate-memory
+        # bookkeeping in Agent.respond() can run without building the 50k-item catalog.
+        self._candidate_features = {
+            asin: [0.0, 0.0, 0.0, 0.0]
+            for asin in self._candidates
+        }
+        self._last_matched_count = len(self._candidates)
         return self._candidates
 
     def _top_scores(self, candidate_list, slots):
