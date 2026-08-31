@@ -30,7 +30,7 @@ import plotly.graph_objects as go
 # ---------------------------------------------------------------------------
 st.set_page_config(
     page_title="Shopping Copilot - Metrics Dashboard",
-    layout="wide",
+    layout="centered",
     initial_sidebar_state="collapsed",
 )
 
@@ -513,6 +513,24 @@ _THEME_CSS = """
       border-radius:6px; overflow:hidden; font-family:'IBM Plex Mono', monospace; }
   [data-testid="stDataFrame"] * { font-family:'IBM Plex Mono', monospace; }
   [data-testid="stDataFrame"] [role="columnheader"] { background: var(--panel-2); color: var(--muted-2); }
+  /* Narrow, centred content like results_dashboard.html */
+  [data-testid="stMainBlockContainer"], [data-testid="stMain"], .block-container {
+      max-width: 1000px; margin: 0 auto; }
+  /* Manifest (Why the offline route) */
+  .sc-manifest { display:flex; flex-direction:column; }
+  .sc-manifest-row { display:grid; grid-template-columns:26px 1fr auto; align-items:center; gap:14px;
+      padding:13px 0; border-top:1px solid var(--line); }
+  .sc-manifest-row:last-child { border-bottom:1px solid var(--line); }
+  .check { width:18px; height:18px; border-radius:4px; background:#1c2a1c; border:1px solid #2c4a2c;
+      color:var(--good); font-size:12px; display:flex; align-items:center; justify-content:center;
+      font-family:'IBM Plex Mono',monospace; }
+  .sc-manifest-name { font-size:13.5px; }
+  .sc-manifest-status { font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:var(--good);
+      letter-spacing:.06em; text-transform:uppercase; }
+  .offline-tags { display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; }
+  .offline-tag { font-family:'IBM Plex Mono',monospace; font-size:11px; padding:5px 10px;
+      border:1px solid var(--line); border-radius:4px; color:var(--muted-2); }
+  .offline-tag.on { color:var(--good); border-color:#2c4a2c; }
 </style>
 """
 
@@ -606,6 +624,45 @@ def _scenario_cards_html(scen_df: pd.DataFrame) -> str:
             '</div>'
         )
     return '<div class="sc-scenarios">' + "".join(cards) + "</div>"
+
+
+def _turn_histogram_fig(sess_df: pd.DataFrame) -> go.Figure:
+    """Histogram of turns to first hit (a 'miss' bucket for sessions never resolved)."""
+    labels = [str(t) for t in range(1, 11)] + ["11+ (miss)"]
+    counts = [int((sess_df["hit_turn"] == t).sum()) for t in range(1, 11)] \
+        if "hit_turn" in sess_df else [0] * 10
+    miss = int((~sess_df["hit"]).sum()) if "hit" in sess_df else 0
+    counts.append(miss)
+    fig = go.Figure(go.Bar(
+        x=labels, y=counts, marker_color=["#E8A33D"] * 10 + ["#5C4A2A"],
+    ))
+    fig.update_layout(title="First hit turn distribution", xaxis_title="Turn", yaxis_title="Sessions")
+    return _style_fig(fig)
+
+
+def _offline_route_html() -> str:
+    """'Why the offline route' manifest + tags, matching the HTML inspiration."""
+    rows = [
+        ("Zero model tokens", "deterministic"),
+        ("No API cost or latency", "offline"),
+        ("Byte-identical rerun", "reproducible"),
+        ("Grounded: select-from-catalog only", "safe"),
+    ]
+    parts = "".join(
+        f'<div class="sc-manifest-row"><div class="check">✓</div>'
+        f'<div class="sc-manifest-name">{name}</div>'
+        f'<div class="sc-manifest-status">{status}</div></div>'
+        for name, status in rows
+    )
+    tags = (
+        '<div class="offline-tags">'
+        '<span class="offline-tag on">0 LLM tokens</span>'
+        '<span class="offline-tag on">fully offline</span>'
+        '<span class="offline-tag on">byte-identical rerun</span>'
+        '<span class="offline-tag">deterministic</span>'
+        '</div>'
+    )
+    return '<div class="sc-manifest">' + parts + "</div>" + tags
 
 
 # ---------------------------------------------------------------------------
@@ -856,6 +913,18 @@ def main() -> None:
     else:
         st.info("No per-scenario metrics in the loaded results.")
 
+    # --- Turn to resolution ----------------------------------------------------
+    st.subheader("Turn to resolution")
+    if not sess_df.empty and "hit_turn" in sess_df.columns:
+        st.plotly_chart(_turn_histogram_fig(sess_df), width="stretch", key="turn_hist")
+        resolved = int(sess_df["hit"].sum()) if "hit" in sess_df else 0
+        st.caption(
+            f"{resolved}/{len(sess_df)} sessions resolved within 10 turns · "
+            f"mean turn to hit = {agg['mttc']:.2f} (misses count as turn 11)"
+        )
+    else:
+        st.info("No per-session turn data for a turn-to-resolution chart.")
+
     # --- Version progression ----------------------------------------------------
     st.subheader("Version progression")
     if version_df is not None and not version_df.empty:
@@ -886,6 +955,17 @@ def main() -> None:
             "hit_rate_at_10, mrr, mttc, efficiency, technical_score, token usage) to compare "
             "versions and see changelog tooltips."
         )
+
+    # --- Why the offline route -------------------------------------------------
+    st.subheader("Why the offline route")
+    st.markdown(
+        "The shipped agent is fully deterministic and needs **no API key**. It reaches these "
+        "numbers **entirely offline, with zero model tokens** — keeping the demo "
+        "dependency-free and byte-reproducible, and the grounded reranker can only select "
+        "from the frozen catalog (no free-generated IDs).",
+        unsafe_allow_html=True,
+    )
+    st.markdown(_offline_route_html(), unsafe_allow_html=True)
 
     # --- Session explorer --------------------------------------------------------
     st.subheader("Session explorer")
