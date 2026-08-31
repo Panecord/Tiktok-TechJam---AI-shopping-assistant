@@ -433,14 +433,14 @@ _THEME_CSS = """
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap');
   :root { --bg:#0B0E14; --panel:#12161F; --panel-2:#171C27; --ink:#F2EFE9;
-          --muted:#7B8494; --amber:#E8A33D; --amber-dim:#6b5228; --cyan:#5EC8D8;
+          --muted:#7B8494; --muted-2:#A9B0BF; --amber:#E8A33D; --amber-dim:#6b5228; --cyan:#5EC8D8;
           --line:#262C3A; --good:#7FBF7F; }
   /* Dark theme + fonts */
   .stApp, [data-testid="stAppViewContainer"], [data-testid="stHeader"], .stMarkdown,
   .stDataFrame, [data-testid="stSidebar"] { background: var(--bg); color: var(--ink);
       font-family:'Space Grotesk', sans-serif; }
   .stApp { background: var(--bg); }
-  h1, h2, h3, .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 { font-family:'Space Grotesk', sans-serif; }
+  h1, h2, h3, .stMarkdown h1, .stMarkdown h2, .stMarkdown h3, [data-testid="stMarkdown"] h1, [data-testid="stHeading"] h1 { font-family:'Space Grotesk', sans-serif; }
   .mono, .sc-hero-title, .sc-metric-label, .sc-metric-value, .sc-compare-label,
   .sc-compare-val, .sc-scenario-n, .sc-scenario-stat, .sc-compare-row { font-family:'IBM Plex Mono', monospace; }
   .sc-metric-value { font-weight: 700; }
@@ -449,42 +449,55 @@ _THEME_CSS = """
   @keyframes sc-fadeUp { from { opacity:0; transform: translateY(10px); } to { opacity:1; transform:none; } }
   .sc-hero { background: var(--panel); border:1px solid var(--line); border-radius:4px;
              padding:24px 28px; margin-top:8px; animation: sc-fadeUp .6s cubic-bezier(.16,.8,.3,1); }
-  .sc-hero-title { font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:.14em;
-                   text-transform:uppercase; color:var(--muted); border-bottom:1px dashed var(--line);
+  .sc-hero-title { font-family:'IBM Plex Mono',monospace; font-size:12.5px; letter-spacing:.14em;
+                   text-transform:uppercase; color:var(--muted-2); border-bottom:1px dashed var(--line);
                    padding-bottom:12px; margin-bottom:16px; display:flex; justify-content:space-between; }
   .sc-metrics { display:grid; grid-template-columns:repeat(5,1fr); gap:4px; }
   .sc-metric { padding:4px 10px 4px 0; border-right:1px dashed var(--line); }
   .sc-metric:last-child { border-right:none; }
-  .sc-metric-label { font-family:'IBM Plex Mono',monospace; font-size:10.5px; letter-spacing:.08em;
-                     text-transform:uppercase; color:var(--muted); margin-bottom:8px; }
-  .sc-metric-value { font-family:'IBM Plex Mono',monospace; font-size:26px; font-weight:600;
+  .sc-metric-label { font-family:'IBM Plex Mono',monospace; font-size:12px; letter-spacing:.08em;
+                     text-transform:uppercase; color:var(--muted-2); margin-bottom:8px; }
+  .sc-metric-value { font-family:'IBM Plex Mono',monospace; font-size:30px; font-weight:600;
                      color:var(--amber); font-variant-numeric:tabular-nums; }
   .sc-metric-value.cyan { color:var(--cyan); }
   .sc-compare { display:flex; flex-direction:column; gap:14px; margin-top:8px; }
   .sc-compare-row { display:grid; grid-template-columns:120px 1fr 90px; align-items:center; gap:14px; }
-  .sc-compare-label { font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--muted); }
+  .sc-compare-label { font-family:'IBM Plex Mono',monospace; font-size:13.5px; color:var(--muted-2); }
   .sc-track { position:relative; height:20px; background:var(--panel-2); border-radius:3px;
               overflow:hidden; border:1px solid var(--line); }
-  /* Animated bar growth */
+  /* Animated bar growth — GPU-composited transform for smoothness (like the HTML ver). */
   .sc-fill { position:absolute; left:0; top:0; bottom:0; border-radius:3px 0 0 3px;
-             width: var(--w, 0%); animation: sc-grow 1.2s cubic-bezier(.16,.8,.3,1) forwards; }
-  @keyframes sc-grow { from { width: 0%; } to { width: var(--w, 0%); } }
+             width:100%; transform-origin:left; transform: scaleX(0); will-change: transform;
+             animation: sc-grow 1.1s cubic-bezier(.16,.8,.3,1) forwards; }
+  @keyframes sc-grow { from { transform: scaleX(0); } to { transform: scaleX(var(--r, 0)); } }
   .sc-fill.base { background:linear-gradient(90deg,#4a3a24,var(--amber-dim)); }
   .sc-fill.final { background:linear-gradient(90deg,var(--amber-dim),var(--amber)); }
   .sc-fill.final.cyan { background:linear-gradient(90deg,#245a63,var(--cyan)); }
-  .sc-compare-val { font-family:'IBM Plex Mono',monospace; font-size:13px; text-align:right; color:var(--ink); }
+  .sc-compare-val { font-family:'IBM Plex Mono',monospace; font-size:14px; text-align:right; color:var(--ink); }
   .sc-scenarios { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-top:8px; }
   .sc-scenario-card { background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:16px;
                       animation: sc-fadeUp .6s cubic-bezier(.16,.8,.3,1); }
   .sc-scenario-card:nth-child(2) { animation-delay:.08s; }
   .sc-scenario-card:nth-child(3) { animation-delay:.16s; }
   .sc-scenario-card:nth-child(4) { animation-delay:.24s; }
-  .sc-scenario-name { font-size:14px; font-weight:600; margin-bottom:2px; }
-  .sc-scenario-n { font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:var(--muted); margin-bottom:12px; }
+  .sc-scenario-name { font-size:16px; font-weight:600; margin-bottom:2px; }
+  .sc-scenario-n { font-family:'IBM Plex Mono',monospace; font-size:12.5px; color:var(--muted-2); margin-bottom:12px; }
   .sc-scenario-stat { display:flex; justify-content:space-between; font-family:'IBM Plex Mono',monospace;
-                      font-size:12px; padding:5px 0; border-top:1px dashed var(--line); }
-  .sc-scenario-stat span:first-child { color:var(--muted); }
-  .sc-scenario-stat span:last-child { color:var(--ink); }
+                      font-size:13.5px; padding:5px 0; border-top:1px dashed var(--line); }
+  .sc-scenario-stat span:first-child { color:var(--muted-2); }
+  .sc-scenario-stat span:last-child { color:var(--ink); font-weight:600; }
+  /* Readable small Streamlit text (captions / paragraphs) */
+  [data-testid="stCaptionContainer"], .stCaption { font-size: 13px; color: var(--muted-2); }
+  .stMarkdown p { font-size: 15px; line-height: 1.5; }
+</style>
+"""
+
+# Applied after _THEME_CSS on every rerun after the first, so entrance/bar animations play
+# once (like the static HTML) instead of replaying on each widget interaction.
+_NO_ANIM_CSS = """
+<style>
+  .sc-fill { animation: none; transform: scaleX(var(--r, 0)); }
+  .sc-hero, .sc-scenario-card { animation: none; }
 </style>
 """
 
@@ -529,10 +542,10 @@ def _baseline_final_html(agg: dict, base: dict) -> str:
         cls = " final cyan" if lower_better else " final"
         return (
             f'<div class="sc-compare-row"><div class="sc-compare-label">{label}</div>'
-            f'<div><div class="sc-track"><div class="sc-fill base" style="--w:{_bar_width(metric, b):.1f}%"></div></div></div>'
+            f'<div><div class="sc-track"><div class="sc-fill base" style="--r:{_bar_width(metric, b) / 100.0:.3f}"></div></div></div>'
             f'<div class="sc-compare-val">{fmt(b)}</div></div>'
             f'<div class="sc-compare-row"><div class="sc-compare-label"></div>'
-            f'<div><div class="sc-track"><div class="sc-fill{cls}" style="--w:{_bar_width(metric, c):.1f}%"></div></div></div>'
+            f'<div><div class="sc-track"><div class="sc-fill{cls}" style="--r:{_bar_width(metric, c) / 100.0:.3f}"></div></div></div>'
             f'<div class="sc-compare-val">{fmt(c)}</div></div>'
         )
 
@@ -666,7 +679,11 @@ def run_evaluator(repo_root: Path, log_placeholder, mode: str) -> dict | None:
 # App
 # ---------------------------------------------------------------------------
 def main() -> None:
-    st.markdown(_THEME_CSS, unsafe_allow_html=True)
+    if st.session_state.get("_anim_played"):
+        st.markdown(_THEME_CSS + _NO_ANIM_CSS, unsafe_allow_html=True)
+    else:
+        st.markdown(_THEME_CSS, unsafe_allow_html=True)
+        st.session_state["_anim_played"] = True
 
     # Sidebar: controls -------------------------------------------------------
     with st.sidebar:
@@ -708,7 +725,7 @@ def main() -> None:
             include_current = st.checkbox("Include current run in the version chart", value=True)
 
     # Main area ---------------------------------------------------------------
-    st.title("🛍️ Shopping Copilot — Metrics Dashboard")
+    st.title("Shopping Copilot — Metrics Dashboard")
 
     # --- Handle the run button ----------------------------------------------
     results = None
