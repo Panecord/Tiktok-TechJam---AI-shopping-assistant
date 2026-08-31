@@ -4,6 +4,7 @@ import sqlite3
 
 from starter.agent import (
     Agent,
+    CARD_CONSISTENCY_BOOST,
     ROUTE_RRF_WEIGHTS,
     _initial_category_context,
     _profile_terms,
@@ -184,3 +185,24 @@ def test_category_route_survives_an_unparseable_category_phrase() -> None:
     agent.connection = _Boom()
     assert agent._category_route_candidates({"category": "and or"}) == []
     assert agent._category_route_candidates({}) == []
+
+
+def test_popularity_prior_breaks_ties_without_overriding_constraint_matches() -> None:
+    """Review volume orders equally-good candidates, but must not outrank relevance.
+
+    The prior is log-scaled precisely so an order-of-magnitude popularity gap separates
+    otherwise-tied products, while a genuine constraint match still wins against a more
+    popular product that does not match.
+    """
+    agent = Agent.__new__(Agent)
+    agent.products = {
+        "popular": {"title": "Tee", "rating_number": 9000},
+        "obscure": {"title": "Tee", "rating_number": 3},
+        "unrated": {"title": "Tee"},
+    }
+    assert agent._popularity_prior("popular") > agent._popularity_prior("obscure")
+    assert agent._popularity_prior("unrated") == 0.0
+    # Log scaling keeps the gap bounded: 9000 vs 3 reviews is worth well under the
+    # weight of a single satisfied constraint (CARD_CONSISTENCY_BOOST = 25.0).
+    gap = agent._popularity_prior("popular") - agent._popularity_prior("obscure")
+    assert gap < CARD_CONSISTENCY_BOOST

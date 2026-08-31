@@ -46,8 +46,8 @@ The command writes per-session results and aggregate metrics to `results.json`.
 The included weak BM25 starter scores Hit Rate@10 `0.125`, MRR `0.068034`, and
 MTTC `9.81` on the released public set. See `docs/baseline_results.json`.
 
-The current deterministic v2.14.0 agent scores Hit Rate@10 `1.0`, MRR `0.984306`,
-MTTC `2.74`, Efficiency `0.826`, and Technical Score `0.960492`, with zero model
+The current deterministic v2.15.0 agent scores Hit Rate@10 `1.0`, MRR `0.996`,
+MTTC `2.055`, Efficiency `0.8945`, and Technical Score `0.9777`, with zero model
 tokens. See `results.json` and `docs/MRR_MTTC_RESEARCH.md`. These are public-development
 results, not a guarantee for the private set.
 
