@@ -508,6 +508,11 @@ _THEME_CSS = """
   .stMarkdown p { font-size: 15px; line-height: 1.5; }
   /* Fade charts in as they re-render (metric selection / filters) */
   [data-testid="stPlotlyChart"] { animation: sc-fadeUp .5s cubic-bezier(.16,.8,.3,1); }
+  /* Session explorer dataframe — receipt panel + mono font */
+  [data-testid="stDataFrame"] { background: var(--panel); border:1px solid var(--line);
+      border-radius:6px; overflow:hidden; font-family:'IBM Plex Mono', monospace; }
+  [data-testid="stDataFrame"] * { font-family:'IBM Plex Mono', monospace; }
+  [data-testid="stDataFrame"] [role="columnheader"] { background: var(--panel-2); color: var(--muted-2); }
 </style>
 """
 
@@ -897,14 +902,30 @@ def main() -> None:
         else:
             display = filtered.copy()
             display["scenario"] = display["scenario"].map(lambda s: SCENARIO_LABEL.get(s, s))
-            display["hit"] = display["hit"].map(lambda v: "hit" if v else "miss")
-            display["reciprocal_rank"] = display["reciprocal_rank"].map(lambda v: f"{v:.4f}")
-            st.dataframe(
-                display[["session_id", "scenario", "hit", "hit_turn", "best_rank",
-                         "reciprocal_rank", "turns_used"]],
-                width="stretch", hide_index=True,
+            display["result"] = display["hit"].map(lambda v: "hit" if v else "miss")
+            display = display[["session_id", "scenario", "result", "hit_turn",
+                               "best_rank", "reciprocal_rank", "turns_used"]].copy()
+
+            def _result_color(v):
+                return (
+                    "background-color:#16301a; color:#7FBF7F; font-weight:600"
+                    if v == "hit" else "background-color:#2a1a1a; color:#E8A33D;"
+                )
+
+            styler = (
+                display.style
+                .map(_result_color, subset=["result"])
+                .format({"reciprocal_rank": "{:.4f}"})
             )
-            st.caption(f"{len(filtered)} / {len(sess_df)} sessions shown.")
+            n_hits = int(display["result"].eq("hit").sum())
+            n_miss = int(display["result"].eq("miss").sum())
+            st.dataframe(styler, width="stretch", hide_index=True, height=420)
+            st.markdown(
+                f"**{len(filtered)} / {len(sess_df)}** sessions · "
+                f"<span style='color:#7FBF7F'>{n_hits} hits</span> · "
+                f"<span style='color:#E8A33D'>{n_miss} misses</span>",
+                unsafe_allow_html=True,
+            )
     else:
         st.info("No per-session data in the loaded results.")
 
