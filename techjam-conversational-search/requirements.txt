@@ -13,3 +13,9 @@ numpy
 sentence-transformers
 scikit-learn
 pytest
+
+# --- Metrics dashboard (app.py) ------------------------------------------------
+# Run with: streamlit run app.py
+streamlit
+pandas
+plotly

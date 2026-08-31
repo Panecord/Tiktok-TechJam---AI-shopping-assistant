@@ -20,6 +20,8 @@ techjam-conversational-search/
   data/catalog.jsonl               frozen 50k-product catalog (included, no download step)
   data/public_set.jsonl            200 labeled development sessions
   demo.py                          interactive terminal demo
+  app.py                           Streamlit metrics dashboard (judging-time live demo)
+  requirements.txt                 deps for tests, embeddings, and the dashboard
   tests/                           regression suite (96 tests)
   docs/TRACK4_COMPLIANCE.md        requirement-by-requirement audit
   docs/MRR_MTTC_RESEARCH.md        metric feasibility math + ablations
@@ -40,6 +42,51 @@ pip install -r requirements.txt   # optional: only needed for tests, embeddings,
 ## Demo video
 
 [PASTE THE PUBLIC YOUTUBE URL — pending recording, see docs/demo_script.md]
+
+## Metrics dashboard
+
+For the live judging demo, a Streamlit dashboard (`techjam-conversational-search/app.py`)
+reads the same `results.json` the evaluator writes and renders the headline metrics,
+per-scenario breakdown, version progression, and a filterable session explorer. It can also
+trigger the evaluator run itself from the sidebar.
+
+```bash
+cd techjam-conversational-search
+pip install -r requirements.txt   # includes streamlit, pandas, plotly
+streamlit run app.py
+```
+
+In the sidebar you can:
+
+- **Evaluator mode** — choose **Local (deterministic)** (`python -m evaluator.local_evaluator`
+  → `results.json`) or **LLM (with model)** (`_validate_llm.py` → `validation_llm.json`, using
+  the `COPILOT_LLM_*` env credentials).
+- **▶ Run Evaluator** — runs the chosen evaluator from the repo root as a subprocess, streams
+  its stdout into an expandable log, shows a **live progress bar with an ETA** (the LLM mode
+  prints `N/M done … eta=…`, so the bar advances per session; the local mode shows an
+  elapsed-time indicator), and auto-loads the fresh output on completion.
+- **Load existing results** — upload a `results.json` / `validation_llm.json`, or point to a
+  path, if you'd rather not re-run.
+- **Version history** — upload/paste a CSV or JSON table (`version`, `description`,
+  `hit_rate_at_10`, `mrr`, `mttc`, `efficiency`, `technical_score`, token usage) to plot
+  the Technical Score progression with changelog tooltips.
+- **Session filters** — scenario and hit/miss filters for spot-checking misses during Q&A.
+
+Each headline metric card shows a hover **tooltip** explaining the metric, and the
+**"📖 Metric definitions"** expander lists them all.
+
+The **controls sidebar is collapsible** and starts collapsed to maximise chart space for a
+live demo; reopen it with the top-left arrow. Each control group is icon-labelled and
+independent collapsible (`⚙️ Run evaluator`, `📂 Load existing results`, `📈 Version
+history`, `🔍 Session filters`), with a chevron showing its open/closed state. All evaluator
+paths are resolved dynamically relative to the repo root, so the dashboard works from
+anywhere (no hardcoded absolute paths).
+
+
+The headline row uses `st.metric` deltas to compare the current run against the previous
+version, and shows the Technical Score formula as a caption:
+
+    Technical Score = 0.50 × HitRate@10 + 0.30 × MRR + 0.20 × Efficiency
 
 ---
 

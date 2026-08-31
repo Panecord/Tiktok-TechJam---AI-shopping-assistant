@@ -51,6 +51,21 @@ MTTC `3.315`, Efficiency `0.7685`, and Technical Score `0.938237`, with zero mod
 tokens. See `results.json` and `docs/MRR_MTTC_RESEARCH.md`. These are public-development
 results, not a guarantee for the private set.
 
+## Metrics Dashboard
+
+A Streamlit dashboard (`app.py`) visualises `results.json` — headline metrics, per-scenario
+breakdown, version progression, and a filterable session explorer — and can re-run the
+evaluator from the sidebar (choose **Local (deterministic)** or **LLM (with model)**, with a
+live progress bar and ETA). Each metric card has a hover tooltip and a **Metric
+Definitions** expander. The controls sidebar is collapsible (starts collapsed; reopen with
+the top-left arrow) and each control group is icon-labelled (`⚙️ Run`, `📂 Load`, `📈
+Version history`, `🔍 Filters`). Run it from this directory:
+
+```bash
+pip install -r requirements.txt   # includes streamlit, pandas, plotly
+streamlit run app.py
+```
+
 ## Agent Interface
 
 ```python
