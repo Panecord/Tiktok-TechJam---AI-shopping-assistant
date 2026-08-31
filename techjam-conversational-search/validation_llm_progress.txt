@@ -1,1 +1,1 @@
-90/200 done | elapsed=2830s | eta=3459s | llm_calls=95 | hits=51 | hr=0.567
+6/6 slices done | elapsed=186s

@@ -49,7 +49,7 @@ from typing import Any
 # Version marker ΓÇö makes it obvious this file supersedes the baseline.
 # ---------------------------------------------------------------------------
 # Updated with AI
-VERSION = "2.12.1"
+VERSION = "2.13.0"
 UPDATED_NOTE = (
     "UPDATED: this file supersedes the weak stateless BM25 starter (v1.0.0). "
     "Adds hybrid retrieval, dialogue state tracking, grounded reranking, and a "
@@ -364,19 +364,33 @@ FUSION_WEIGHTS = {
     "price": 0.0,
     "bias": -3.5,
 }
-EVIDENCE_BOOST_WEIGHT = 6.0
+# Lowered from 6.0 after the card-split fix below: generic token-coverage evidence and
+# the (now correctly matched) constraint card were both firing on the same disclosures,
+# double-counting one signal and drowning the lexical/category tie-breakers.
+EVIDENCE_BOOST_WEIGHT = 2.0
 # Candidate-source consistency and durable category context are intentionally separate
 # from generic evidence coverage. A joint public-dev sweep selected this balance.
 CARD_CONSISTENCY_BOOST = 25.0
+# A shopper's leading requirement is disclosed before their incidental ones, so a
+# candidate whose *first* constraint matches is a better explanation of the same answer
+# than one that matches only in a trailing slot.  The decay is deliberately shallow: it
+# is a tie-breaker among equally card-consistent candidates, not a re-ranking signal.
+CARD_POSITION_DECAY = (1.0, 0.95, 0.90, 0.85)
 CATEGORY_CONTEXT_BOOST = 7.5
 
 # Precision-first slate sizes. Early clarification turns show a small hero slate so a
 # weakly supported item is not presented as equally strong; later turns expand toward
 # top_k for recall. Buying can stay precise longer because its opening message carries a
 # hard constraint. An intent pivot starts a shorter new precision epoch.
-BUYING_SLATE_SCHEDULE = {1: 1, 2: 1, 3: 1, 4: 1, 5: 2, 6: 5}
-BROWSING_SLATE_SCHEDULE = {1: 1, 2: 1, 3: 1, 4: 2, 5: 4}
-PIVOT_SLATE_SCHEDULE = {1: 1, 2: 1, 3: 2}
+BUYING_SLATE_SCHEDULE = {1: 1, 2: 1, 3: 1, 4: 1, 5: 1}
+BROWSING_SLATE_SCHEDULE = {1: 1, 2: 1, 3: 1, 4: 1, 5: 1}
+PIVOT_SLATE_SCHEDULE = {1: 1, 2: 1, 3: 1, 4: 1, 5: 1}
+
+# Number of consecutive open-ended questions that may return no new constraint before
+# the policy gives up on them and reverts to targeted, entropy-ranked attribute asks.
+# 1 is too eager: a shopper legitimately answers the very first question with "no
+# preference, use your judgment" and still has constraints left to give.
+OPEN_ASK_DRY_LIMIT = 2
 
 SLATE_REJECTION_RE = re.compile(
     r"\b(?:not\s+quite\s+right|none\s+of\s+(?:these|those)|different\s+options|show\s+me\s+others)\b",
@@ -1124,10 +1138,18 @@ class Agent:
         """How well a candidate's leading constraints explain observed answers (0..1)."""
         raw = slots.get("free_text_constraints") or []
         values = [raw] if isinstance(raw, str) else list(raw)
+        # A single shopper turn can disclose several independent constraints joined by
+        # ";" (an open-ended question reliably returns two at once).  Scoring the joined
+        # blob as one string can never equal a single card entry, so the exact-match
+        # branch below silently degraded to the 0.25x partial-coverage branch and the
+        # strongest available signal was lost.  Split first, exactly as
+        # _evidence_match_score already does, so each disclosed constraint is matched
+        # on its own.
         observed = [
             normalized
             for value in values
-            if (normalized := " ".join(TOKEN_RE.findall(str(value).lower())))
+            for part in re.split(r"[;\n]+", str(value))
+            if (normalized := " ".join(TOKEN_RE.findall(part.lower())))
         ]
         if not observed:
             return 0.0
@@ -1138,8 +1160,9 @@ class Agent:
             tokens = set(value.split())
             weight = min(5.0, 1.0 + math.sqrt(len(value.split())))
             total_weight += weight
-            if value in card:
-                score = 1.0
+            position = next((i for i, entry in enumerate(card) if value == entry), None)
+            if position is not None:
+                score = CARD_POSITION_DECAY[min(position, len(CARD_POSITION_DECAY) - 1)]
             else:
                 coverage = max(
                     (len(tokens.intersection(candidate.split())) / len(tokens) for candidate in card),
@@ -1322,6 +1345,7 @@ class Agent:
         candidate_list: list[str],
         question_history: list[str],
         profile_tags: list[str] | None = None,
+        prefer_open: bool = False,
     ) -> str | None:
         """Pick an answerable attribute that also splits the candidate pool.
 
@@ -1331,6 +1355,13 @@ class Agent:
         """
         # Updated with AI
         if not candidate_list:
+            return "other"
+        # An open-ended question is not a fallback -- while the shopper is still
+        # volunteering requirements it is the highest-yield question available, because
+        # it is not scoped to one attribute and so collects whatever they consider
+        # important rather than only what we thought to ask about.  Targeted
+        # entropy-ranked asks take over once it stops producing anything new.
+        if prefer_open:
             return "other"
         per_attr_values: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
         for asin in candidate_list[:200]:
@@ -1775,6 +1806,7 @@ class Agent:
             "pivot_seen": False,
             "precision_epoch_turn": 0,
             "slate_rejected": False,
+            "open_ask_dry": 0,
         }
 
     def respond(
@@ -1860,11 +1892,20 @@ class Agent:
                 state["category_context"] = replacement_category
             state["override_consumed"] = True
         state["slots"].update(new_slots)
+        evidence_before = len(state["evidence"])
         if new_evidence:
             normalized = new_evidence.lower()
             if all(item.lower() != normalized for item in state["evidence"]):
                 state["evidence"].append(new_evidence)
                 state["evidence"] = state["evidence"][-6:]
+        # A reply to an open-ended question that adds no constraint means the shopper
+        # has nothing further to volunteer unprompted; count it so the policy can fall
+        # back to targeted questions instead of asking the same open question forever.
+        if state["questions_asked"] and state["questions_asked"][-1] == "other":
+            if len(state["evidence"]) == evidence_before:
+                state["open_ask_dry"] = state.get("open_ask_dry", 0) + 1
+            else:
+                state["open_ask_dry"] = 0
 
         slots = state["slots"]
         evidence_context = "\n".join(state["evidence"])
@@ -1997,7 +2038,10 @@ class Agent:
         if not isinstance(profile_tags, list):
             profile_tags = []
         ask_attribute = self._choose_ask_attribute(
-            candidates, state["questions_asked"], [str(tag) for tag in profile_tags]
+            candidates,
+            state["questions_asked"],
+            [str(tag) for tag in profile_tags],
+            prefer_open=state.get("open_ask_dry", 0) < OPEN_ASK_DRY_LIMIT,
         )
         if ask_attribute not in ALLOWED_ASK_ATTRIBUTES:
             ask_attribute = "other"

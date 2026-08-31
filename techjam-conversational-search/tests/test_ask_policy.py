@@ -59,7 +59,9 @@ class _PolicyAgent(Agent):
     def _rerank(self, candidate_list, slots, use_llm=True, recent_turns=None):
         return candidate_list[:10], {"prompt_tokens": 0, "completion_tokens": 0}
 
-    def _choose_ask_attribute(self, candidate_list, question_history, profile_tags=None):
+    def _choose_ask_attribute(
+        self, candidate_list, question_history, profile_tags=None, prefer_open=False
+    ):
         return "color"
 
 

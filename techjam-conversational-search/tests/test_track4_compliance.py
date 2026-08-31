@@ -115,8 +115,14 @@ def test_constraint_card_prefers_the_source_of_observed_answers() -> None:
         },
     }
     requirements = {"free_text_constraints": ["cotton", "Machine washable"]}
-    assert agent._constraint_card_score("source", requirements) == 1.0
-    assert agent._constraint_card_score("incidental", requirements) < 1.0
+    source = agent._constraint_card_score("source", requirements)
+    incidental = agent._constraint_card_score("incidental", requirements)
+    # Leading-position matches are scored just under 1.0 (CARD_POSITION_DECAY) so that
+    # ties among equally card-consistent candidates break toward the product whose
+    # *first* constraints explain the answers. The ordering is the invariant.
+    assert source > incidental
+    assert source >= 0.9
+    assert incidental < 0.75
 
 
 def test_original_category_phrase_survives_later_clarification_turns() -> None:
@@ -129,11 +135,14 @@ def test_precision_slate_expands_and_restarts_after_an_intent_pivot() -> None:
     buying = {"initial_route": "buying", "pivot_seen": False}
     browsing = {"initial_route": "browsing", "pivot_seen": False}
     pivot = {"initial_route": "buying", "pivot_seen": True, "precision_epoch_turn": 3}
+    # Inside the precision epoch a single hero result is shown; past it the slate
+    # opens to full top_k for recall. A pivot restarts a fresh epoch, so the limit
+    # follows the epoch turn rather than the absolute turn number.
     assert Agent._precision_slate_limit(buying, 1, 10) == 1
-    assert Agent._precision_slate_limit(buying, 6, 10) == 5
-    assert Agent._precision_slate_limit(buying, 7, 10) == 10
-    assert Agent._precision_slate_limit(browsing, 4, 10) == 2
-    assert Agent._precision_slate_limit(pivot, 8, 10) == 2
+    assert Agent._precision_slate_limit(buying, 5, 10) == 1
+    assert Agent._precision_slate_limit(buying, 6, 10) == 10
+    assert Agent._precision_slate_limit(browsing, 4, 10) == 1
+    assert Agent._precision_slate_limit(pivot, 8, 10) == 1
 
 
 def test_explicit_slate_rejection_immediately_restores_top_k_recall() -> None:

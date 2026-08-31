@@ -5,8 +5,8 @@ within 10 turns by asking useful clarifying questions, not by matching keywords.
 against a frozen 50,000-product Amazon catalog and the organizer's headless Agent API
 (`reset` / `respond`) — evaluated purely on backend behavior, no UI.
 
-On the 200-session public development set, the current agent (**v2.12.1**) reaches
-Hit Rate@10 `1.0`, MRR `0.948458`, MTTC `3.315`, and Technical Score `0.938237`, entirely
+On the 200-session public development set, the current agent (**v2.13.0**) reaches
+Hit Rate@10 `0.995`, MRR `0.976806`, MTTC `2.81`, and Technical Score `0.954342`, entirely
 deterministically — zero model calls, zero LLM tokens. The provided weak BM25 starter
 scores Hit Rate@10 `0.125`, MRR `0.068034` for comparison. These are public-set results,
 not a guarantee for the private evaluation set.
@@ -101,6 +101,19 @@ so the whole project is documented in one place.)*
 
 > **Updated with AI.** This document describes the upgraded `starter/agent.py` that
 > replaces the weak, stateless BM25 baseline (v1.0.0) shipped with the challenge.
+>
+> **v2.13.0 (open-ended clarification + card-split fix):** fixes a scoring bug in which a
+> single reply disclosing several constraints joined by `;` was matched against the
+> constraint card as one blob, so it could never match a card entry and the strongest
+> ranking signal silently degraded to partial coverage. Adds an open-ended-first
+> clarification policy (an unscoped question collects whatever the shopper considers
+> important, and targeted attribute questions take over once it stops yielding anything
+> new) and holds the one-item precision slate through turn 5 on every route. Public set:
+> MRR `0.948458 -> 0.976806`, MTTC `3.315 -> 2.81`, Technical Score
+> **`0.938237 -> 0.954342`**, with Hit Rate@10 `1.0 -> 0.995` (one session whose target
+> falls outside the BM25 candidate pool entirely). Validated on a 400-session held-out
+> set built from catalog targets the public set never uses, where the same change set
+> moves the score `0.910664 -> 0.933532`.
 >
 > **v2.12.1 (Pareto refinement):** strengthens generic evidence, refines the browsing
 > expansion schedule, and immediately restores Top 10 only after explicit slate rejection.
@@ -254,6 +267,7 @@ so the whole project is documented in one place.)*
 | `v2.10.0` | **Dual-route intent + free-text evidence.** `_route_intent` + `ROUTE_RRF_WEIGHTS` (Buying = bm25/slot precision, Browsing = dense/profile diversity); `_extract_constraint_evidence` + `_evidence_match_score` with `EVIDENCE_BOOST_WEIGHT=3.0`; `_profile_terms` anonymized profile context; `ANSWERABILITY_PRIORITY` + profile tie-breakers in `_choose_ask_attribute`; scoped-reply slot protection; `_novel_slate`. v2.9.0 synonyms + re-fit weights retained. | HR@10 `0.715 -> 0.995`, MRR `0.4938 -> 0.58419`, MTTC `5.805 -> 2.73`, Efficiency `0.5195 -> 0.827`, score `0.6095 -> 0.8382` |
 | `v2.11.0` | **Candidate-memory + exact-evidence recall.** Keeps a bounded prior beam, re-scores it with current evidence, clears it on pivots/resets, and adds a grounded exact-substring recall route with a two-live-to-one-recall blend. | HR@10 `0.995 -> 1.0` (200/200), MRR `0.583518`, MTTC `2.70`, Efficiency `0.83`, score `0.841055`; every scenario HR `1.0` |
 | `v2.12.0` | **Constraint-source reranking + durable category + precision-first slates.** Reconstructs candidate constraint cards from catalog fields, keeps the original category active after long replies, and expands route/pivot-aware slates only as confidence grows. | HR@10 `1.0`, MRR `0.583518 -> 0.939048`, MTTC `2.70 -> 3.325`, Efficiency `0.7675`, score `0.841055 -> 0.935214`; zero tokens |
+| `v2.13.0` | **Open-ended clarification + card-split fix.** Multi-constraint replies are split before card matching; open-ended asks lead until they stop yielding; 1-item slate through turn 5; evidence weight `6 -> 2`; leading-position card decay. | HR@10 `1.0 -> 0.995`, MRR `0.948458 -> 0.976806`, MTTC `3.315 -> 2.81`, Efficiency `0.7685 -> 0.819`, score `0.938237 -> 0.954342` |
 | `v2.12.1` | **Pareto refinement.** Evidence weight `5 -> 6`, Browsing expands `1,1,1,2,4,10`, and explicit rejection restores Top 10 immediately. | HR@10 `1.0`, MRR `0.939048 -> 0.948458`, MTTC `3.325 -> 3.315`, Efficiency `0.7675 -> 0.7685`, score `0.935214 -> 0.938237` |
 
 > The next improvement will be `v2.13.0`.
@@ -305,22 +319,22 @@ user turn
 Measured on the **200-session public dev set** via `python -m evaluator.local_evaluator`
 (the evaluator and public labels are untouched).
 
-| Metric | Baseline | v2.7.0 | v2.8.0 | v2.9.0 | v2.11.0 | Current v2.12.1 |
-|--------|----------|--------|--------|--------|---------|-----------------|
-| Hit Rate@10 | `0.125` | `0.630` | `0.650` | `0.715` | `1.0` | **`1.0`** |
-| MRR | `0.068034` | `0.455567` | `0.478685` | `0.493812` | `0.583518` | **`0.948458`** |
-| MTTC | `9.81` | `7.555` | `6.470` | `5.805` | `2.70` | **`3.315`** |
-| Efficiency | `0.119` | `0.3445` | `0.453` | `0.5195` | `0.83` | **`0.7685`** |
-| **Technical Score** | `0.10671` | `0.520570` | `0.559206` | `0.609544` | `0.841055` | **`0.938237`** |
+| Metric | Baseline | v2.8.0 | v2.9.0 | v2.11.0 | v2.12.1 | Current v2.13.0 |
+|--------|----------|--------|--------|---------|---------|-----------------|
+| Hit Rate@10 | `0.125` | `0.650` | `0.715` | `1.0` | `1.0` | **`0.995`** |
+| MRR | `0.068034` | `0.478685` | `0.493812` | `0.583518` | `0.948458` | **`0.976806`** |
+| MTTC | `9.81` | `6.470` | `5.805` | `2.70` | `3.315` | **`2.81`** |
+| Efficiency | `0.119` | `0.453` | `0.5195` | `0.83` | `0.7685` | **`0.819`** |
+| **Technical Score** | `0.10671` | `0.559206` | `0.609544` | `0.841055` | `0.938237` | **`0.954342`** |
 
 Scenario breakdown (from `results.json`):
 
-| Scenario | Baseline HR@10 | v2.11.0 | Current v2.12.1 | Current MRR | Current MTTC |
+| Scenario | Baseline HR@10 | v2.12.1 | Current v2.13.0 | Current MRR | Current MTTC |
 |----------|----------------|---------|-----------------|-------------|--------------|
-| buying | `0.2375` | `1.0` | **`1.0`** | `0.974375` | `2.7375` |
-| browsing | `0.025` | `1.0` | **`1.0`** | `0.930729` | `3.25` |
-| intent_override | `0.1333` | `1.0` | **`1.0`** | `0.934444` | `4.633333` |
-| boundary | `0.0` | `1.0` | **`1.0`** | `0.925` | `4.5` |
+| buying | `0.2375` | `1.0` | **`0.9875`** | `0.968750` | `2.425` |
+| browsing | `0.025` | `1.0` | **`1.0`** | `0.982639` | `2.625` |
+| intent_override | `0.1333` | `1.0` | **`1.0`** | `0.975` | `4.133333` |
+| boundary | `0.0` | `1.0` | **`1.0`** | `1.0` | `3.4` |
 
 The largest gains come from the **browsing** and **intent_override** scenarios, which were
 near-zero for the baseline because it never asked questions and never handled pivots.
