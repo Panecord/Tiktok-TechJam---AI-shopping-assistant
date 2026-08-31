@@ -400,6 +400,23 @@ def _fmt_delta(delta: float) -> str:
 # ---------------------------------------------------------------------------
 # Version progression chart
 # ---------------------------------------------------------------------------
+_CHART_PALETTE = ["#E8A33D", "#5EC8D8", "#7FBF7F", "#B78BFF", "#F2EFE9"]
+
+
+def _style_fig(fig):
+    """Apply the receipt-theme styling + animated transitions to a Plotly figure."""
+    fig.update_layout(
+        template="plotly_dark",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="'IBM Plex Mono', monospace", color="#F2EFE9", size=13),
+        colorway=_CHART_PALETTE,
+        transition=dict(duration=450, easing="cubic-in-out"),
+        margin=dict(l=10, r=10, t=55, b=10),
+    )
+    return fig
+
+
 def version_chart(df: pd.DataFrame, selected: list[str]) -> go.Figure:
     fig = go.Figure()
     if df.empty or not selected:
@@ -417,11 +434,11 @@ def version_chart(df: pd.DataFrame, selected: list[str]) -> go.Figure:
             customdata=desc.tolist(),
             hovertemplate="<b>%{x}</b><br>%{customdata}<br>%{y:.4f}<extra>%{fullData.name}</extra>",
         ))
+    fig = _style_fig(fig)
     fig.update_layout(
         hovermode="x unified",
         yaxis_title="Value",
         xaxis_title="Version",
-        margin=dict(l=10, r=10, t=40, b=10),
     )
     return fig
 
@@ -489,6 +506,8 @@ _THEME_CSS = """
   /* Readable small Streamlit text (captions / paragraphs) */
   [data-testid="stCaptionContainer"], .stCaption { font-size: 13px; color: var(--muted-2); }
   .stMarkdown p { font-size: 15px; line-height: 1.5; }
+  /* Fade charts in as they re-render (metric selection / filters) */
+  [data-testid="stPlotlyChart"] { animation: sc-fadeUp .5s cubic-bezier(.16,.8,.3,1); }
 </style>
 """
 
@@ -814,18 +833,21 @@ def main() -> None:
         dark = st.get_option("theme.base") == "dark"
         fig = px.bar(
             scen_melt,
-            x="scenario_label",
-            y="value",
+            x="value",
+            y="scenario_label",
             color="metric",
+            orientation="h",
             barmode="group",
             labels={"scenario_label": "Scenario", "value": "Value", "metric": "Metric"},
-            template="plotly_dark" if dark else "plotly_white",
             title="Hit Rate@10 / MRR / MTTC by scenario",
         )
-        fig.update_yaxes(title="Value")
-        fig.update_layout(legend_title_text="Metric", margin=dict(l=10, r=10, t=50, b=10))
-        fig.for_each_trace(lambda t: t.update(hovertemplate="%{fullData.name}: %{y:.4f}<extra></extra>"))
-        st.plotly_chart(fig, width="stretch")
+        fig.update_xaxes(title="Value")
+        label_order = [SCENARIO_LABEL[s] for s in SCENARIO_ORDER if s in set(scen_df["scenario"])]
+        fig.update_yaxes(categoryorder="array", categoryarray=label_order)
+        fig.update_layout(legend_title_text="Metric")
+        fig.for_each_trace(lambda t: t.update(hovertemplate="%{fullData.name}: %{x:.4f}<extra></extra>"))
+        _style_fig(fig)
+        st.plotly_chart(fig, width="stretch", key="scenario_chart")
     else:
         st.info("No per-scenario metrics in the loaded results.")
 
@@ -850,7 +872,7 @@ def main() -> None:
         )
         fig = version_chart(version_df, series)
         if fig.data:
-            st.plotly_chart(fig, width="stretch")
+            st.plotly_chart(fig, width="stretch", key="version_chart")
         else:
             st.info("Select at least one metric to plot.")
     else:
