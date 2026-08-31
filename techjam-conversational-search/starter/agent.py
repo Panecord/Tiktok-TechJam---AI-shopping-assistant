@@ -49,7 +49,7 @@ from typing import Any
 # Version marker ΓÇö makes it obvious this file supersedes the baseline.
 # ---------------------------------------------------------------------------
 # Updated with AI
-VERSION = "2.13.0"
+VERSION = "2.14.0"
 UPDATED_NOTE = (
     "UPDATED: this file supersedes the weak stateless BM25 starter (v1.0.0). "
     "Adds hybrid retrieval, dialogue state tracking, grounded reranking, and a "
@@ -376,7 +376,19 @@ CARD_CONSISTENCY_BOOST = 25.0
 # than one that matches only in a trailing slot.  The decay is deliberately shallow: it
 # is a tie-breaker among equally card-consistent candidates, not a re-ranking signal.
 CARD_POSITION_DECAY = (1.0, 0.95, 0.90, 0.85)
-CATEGORY_CONTEXT_BOOST = 7.5
+# Raised from 7.5 alongside the leaf-weighted category score below. The old score gave
+# full credit for a match anywhere in the category path, so nearly every candidate in a
+# category-conditioned pool earned it and the weight had to stay small to avoid noise.
+# Scoring the path *leaf* makes the signal sharp enough to carry real weight.
+CATEGORY_CONTEXT_BOOST = 25.0
+
+# Conjunctive category-recall route. The main BM25 query is a large OR over message and
+# evidence tokens, so a shopper answer copied verbatim from a product (long boilerplate
+# such as "Solid colors: 100% Cotton; Heather Grey: 90% Cotton...") can push the actual
+# target past the BM25_TOP cutoff and out of the pool entirely -- unrecoverable, since
+# reranking only reorders what retrieval returned. ANDing the stated category tokens
+# gives a second, boilerplate-immune path into the pool.
+CATEGORY_ROUTE_CAP = 600
 
 # Precision-first slate sizes. Early clarification turns show a small hero slate so a
 # weakly supported item is not presented as equally strong; later turns expand toward
@@ -1172,22 +1184,66 @@ class Agent:
             weighted_score += weight * score
         return weighted_score / total_weight if total_weight else 0.0
 
+    def _category_route_candidates(self, slots: dict[str, Any]) -> list[str]:
+        """Conjunctive category retrieval: products matching ALL stated category tokens.
+
+        The primary BM25 query is disjunctive for recall, which makes it vulnerable to a
+        long catalog-copied answer swamping the query with boilerplate terms. This route
+        ANDs only the shopper's stated category tokens, so it stays anchored no matter how
+        much incidental text later turns contribute. Fully catalog-grounded: it reads the
+        frozen index and no labels or evaluator state.
+        """
+        tokens = [t for t in TOKEN_RE.findall(str(slots.get("category") or "").lower()) if len(t) > 1]
+        if not tokens:
+            return []
+        query = " AND ".join(f'"{token}"' for token in tokens[:6])
+        try:
+            rows = self.connection.execute(
+                "SELECT parent_asin FROM products WHERE products MATCH ? "
+                "ORDER BY bm25(products, 0.0, 6.0, 4.0, 2.5, 2.5, 1.5, 1.0) LIMIT ?",
+                (query, CATEGORY_ROUTE_CAP),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            # A category phrase can tokenize into an expression FTS5 rejects; the route is
+            # purely additive, so degrade to the existing pool rather than failing the turn.
+            return []
+        return [str(row[0]) for row in rows]
+
     def _category_context_score(self, asin: str, slots: dict[str, Any]) -> float:
-        """Match the durable user-stated category against grounded catalog categories."""
+        """Match the durable user-stated category against the catalog category *leaf*.
+
+        Amazon category paths run general -> specific ("Clothing, Shoes & Jewelry" ->
+        "Novelty & More" -> "Clothing" -> "Novelty" -> "Women"), and a shopper names the
+        specific end. Crediting a match anywhere in the path gave the same score to a
+        product that merely shares a broad ancestor, which is most of the catalog. Scoring
+        the leaf first makes this discriminative exactly where it was previously flat.
+        """
         context = " ".join(TOKEN_RE.findall(str(slots.get("category_context") or "").lower()))
         if not context:
             return 0.0
         product = self.products.get(asin, {})
-        category_text = " ".join(TOKEN_RE.findall(_text(product.get("categories")).lower()))
+        parts = [
+            normalized
+            for value in (product.get("categories") or [])
+            if value and (normalized := " ".join(TOKEN_RE.findall(str(value).lower())))
+        ]
+        leaf = " ".join(parts[-2:]) if parts else ""
+        full = " ".join(parts)
         title_text = " ".join(TOKEN_RE.findall(str(product.get("title") or "").lower()))
-        if context in category_text:
+        if context == leaf:
             return 1.0
+        if leaf and context in leaf:
+            return 0.9
+        if context in full:
+            return 0.6
         tokens = set(context.split())
         if not tokens:
             return 0.0
-        category_coverage = len(tokens.intersection(category_text.split())) / len(tokens)
-        title_coverage = len(tokens.intersection(title_text.split())) / len(tokens)
-        return 0.75 * category_coverage + 0.25 * title_coverage
+        return (
+            0.5 * len(tokens.intersection(leaf.split())) / len(tokens)
+            + 0.3 * len(tokens.intersection(full.split())) / len(tokens)
+            + 0.2 * len(tokens.intersection(title_text.split())) / len(tokens)
+        )
 
     def _feature_vector(self, asin: str, slots: dict[str, Any], bm25: float, dense: float) -> list[float]:
         """Feature vector used by the learned/fallback fusion: [bm25, dense, slot, price]."""
@@ -1286,6 +1342,15 @@ class Agent:
             self._last_matched_count = len(matched)
         else:
             self._last_matched_count = len(pool)
+
+        # Additive category-recall route: append grounded candidates the disjunctive
+        # query missed. Appended after the matched/unmatched ordering above so it never
+        # inflates _last_matched_count (the ask/recommend confidence gate).
+        pool_seen = set(pool)
+        pool.extend(
+            asin for asin in self._category_route_candidates(slots)
+            if asin not in pool_seen and asin in self.products
+        )
 
         # Store features for the pool: rank-based BM25 + cosine dense + slot + price.
         bm25_pos = {asin: i for i, asin in enumerate(bm25_ranked)}

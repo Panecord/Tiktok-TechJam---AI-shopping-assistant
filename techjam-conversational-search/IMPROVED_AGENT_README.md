@@ -1,7 +1,21 @@
-# Improved Agent — Track 4 Shopping Copilot (v2.13.0)
+# Improved Agent — Track 4 Shopping Copilot (v2.14.0)
 
 > **Updated with AI.** This document describes the upgraded `starter/agent.py` that
 > replaces the weak, stateless BM25 baseline (v1.0.0) shipped with the challenge.
+>
+> **v2.14.0 (category-anchored recall + leaf category matching):** restores Hit Rate@10 to
+> `1.0` and crosses `0.96`. Two changes that only work together: (a) a **conjunctive
+> category-recall route** — the primary BM25 query is a large OR over message and evidence
+> tokens, so a verbatim catalog answer full of boilerplate can push the real target past
+> the `BM25_TOP` cutoff and out of the pool entirely, which no reranking can undo; ANDing
+> the stated category tokens gives a second, boilerplate-immune path in. (b) **leaf-weighted
+> category matching** — Amazon paths run general to specific and the shopper names the
+> specific end, so crediting a match anywhere in the path scored most of the catalog
+> identically; scoring the leaf makes it discriminative, and lets `CATEGORY_CONTEXT_BOOST`
+> rise `7.5 -> 25.0`. The route alone changes nothing (`0.954342`) because the recalled
+> candidates cannot be ranked; together they reach **`0.960492`**. Public set: HR@10
+> `0.995 -> 1.0`, MRR `0.976806 -> 0.984306`, MTTC `2.81 -> 2.74`. Held-out 400-session
+> proxy `0.933532 -> 0.936336`.
 >
 > **v2.13.0 (open-ended clarification + card-split fix):** fixes a scoring bug in which a
 > single reply disclosing several constraints joined by `;` was matched against the
@@ -175,9 +189,10 @@
 | `v2.11.0` | **Candidate-memory + exact-evidence recall.** Keeps a bounded prior beam, re-scores it with current evidence, clears it on pivots/resets, and adds a grounded exact-substring recall route with a two-live-to-one-recall blend. | HR@10 `0.995 -> 1.0` (200/200), MRR `0.583518`, MTTC `2.70`, Efficiency `0.83`, score `0.841055`; every scenario HR `1.0` |
 | `v2.12.0` | **Constraint-source reranking + durable category + precision-first slates.** Reconstructs candidate constraint cards from catalog fields, keeps the original category active after long replies, and expands route/pivot-aware slates only as confidence grows. | HR@10 `1.0`, MRR `0.583518 -> 0.939048`, MTTC `2.70 -> 3.325`, Efficiency `0.7675`, score `0.841055 -> 0.935214`; zero tokens |
 | `v2.12.1` | **Pareto refinement.** Evidence weight `5 -> 6`, Browsing expands `1,1,1,2,4,10`, and explicit rejection restores Top 10 immediately. | HR@10 `1.0`, MRR `0.939048 -> 0.948458`, MTTC `3.325 -> 3.315`, Efficiency `0.7675 -> 0.7685`, score `0.935214 -> 0.938237` |
+| `v2.14.0` | **Category-anchored recall + leaf category matching.** A conjunctive category route (AND over the stated category tokens) gives the target a boilerplate-immune path into the candidate pool; category scoring moves from "matches anywhere in the path" to leaf-weighted, letting `CATEGORY_CONTEXT_BOOST` rise `7.5 -> 25.0`. Neither works alone. | HR@10 `0.995 -> 1.0`, MRR `0.976806 -> 0.984306`, MTTC `2.81 -> 2.74`, Efficiency `0.819 -> 0.826`, score `0.954342 -> 0.960492`; held-out `0.933532 -> 0.936336` |
 | `v2.13.0` | **Open-ended clarification + card-split fix.** Multi-constraint replies are split before card matching (bug fix); open-ended asks lead until they stop yielding new constraints, then targeted attribute asks resume; 1-item precision slate through turn 5 on all routes; evidence weight `6 -> 2`; leading-position card decay. | HR@10 `1.0 -> 0.995`, MRR `0.948458 -> 0.976806`, MTTC `3.315 -> 2.81`, Efficiency `0.7685 -> 0.819`, score `0.938237 -> 0.954342`; held-out 400-session proxy `0.910664 -> 0.933532` |
 
-> The next improvement will be `v2.14.0`.
+> The next improvement will be `v2.15.0`.
 
 ## 1. Summary of What Changed
 
@@ -226,13 +241,13 @@ user turn
 Measured on the **200-session public dev set** via `python -m evaluator.local_evaluator`
 (the evaluator and public labels are untouched).
 
-| Metric | Baseline | v2.8.0 | v2.9.0 | v2.11.0 | v2.12.1 | Current v2.13.0 |
-|--------|----------|--------|--------|---------|---------|-----------------|
-| Hit Rate@10 | `0.125` | `0.650` | `0.715` | `1.0` | `1.0` | **`0.995`** |
-| MRR | `0.068034` | `0.478685` | `0.493812` | `0.583518` | `0.948458` | **`0.976806`** |
-| MTTC | `9.81` | `6.470` | `5.805` | `2.70` | `3.315` | **`2.81`** |
-| Efficiency | `0.119` | `0.453` | `0.5195` | `0.83` | `0.7685` | **`0.819`** |
-| **Technical Score** | `0.10671` | `0.559206` | `0.609544` | `0.841055` | `0.938237` | **`0.954342`** |
+| Metric | Baseline | v2.9.0 | v2.11.0 | v2.12.1 | v2.13.0 | Current v2.14.0 |
+|--------|----------|--------|---------|---------|---------|-----------------|
+| Hit Rate@10 | `0.125` | `0.715` | `1.0` | `1.0` | `0.995` | **`1.0`** |
+| MRR | `0.068034` | `0.493812` | `0.583518` | `0.948458` | `0.976806` | **`0.984306`** |
+| MTTC | `9.81` | `5.805` | `2.70` | `3.315` | `2.81` | **`2.74`** |
+| Efficiency | `0.119` | `0.5195` | `0.83` | `0.7685` | `0.819` | **`0.826`** |
+| **Technical Score** | `0.10671` | `0.609544` | `0.841055` | `0.938237` | `0.954342` | **`0.960492`** |
 
 Generalization check — 400 sessions built by the same harness from catalog targets absent
 from the public set (a private-set proxy):
@@ -240,14 +255,15 @@ from the public set (a private-set proxy):
 | Version | Held-out HR@10 | Held-out MRR | Held-out MTTC | Held-out Score |
 |---------|----------------|--------------|---------------|----------------|
 | v2.12.1 | `0.975` | `0.908714` | `3.4725` | `0.910664` |
-| **v2.13.0** | `0.975` | **`0.948774`** | **`2.93`** | **`0.933532`** |
+| v2.13.0 | `0.975` | `0.948774` | `2.93` | `0.933532` |
+| **v2.14.0** | **`0.9775`** | **`0.952454`** | **`2.9075`** | **`0.936336`** |
 
 Scenario breakdown (from `results.json`):
 
-| Scenario | Baseline HR@10 | v2.12.1 | Current v2.13.0 | Current MRR | Current MTTC |
+| Scenario | Baseline HR@10 | v2.13.0 | Current v2.14.0 | Current MRR | Current MTTC |
 |----------|----------------|---------|-----------------|-------------|--------------|
-| buying | `0.2375` | `1.0` | **`0.9875`** | `0.968750` | `2.425` |
-| browsing | `0.025` | `1.0` | **`1.0`** | `0.982639` | `2.625` |
+| buying | `0.2375` | `0.9875` | **`1.0`** | `0.981250` | `2.25` |
+| browsing | `0.025` | `1.0` | **`1.0`** | `0.988889` | `2.625` |
 | intent_override | `0.1333` | `1.0` | **`1.0`** | `0.975` | `4.133333` |
 | boundary | `0.0` | `1.0` | **`1.0`** | `1.0` | `3.4` |
 
@@ -430,7 +446,8 @@ All constants live at module top-level in `starter/agent.py` and are tuned again
 | `EVIDENCE_BOOST_WEIGHT` | `2.0` | weight of generic free-text evidence coverage (lowered from `6.0` in v2.13.0; it was double-counting with the constraint card) |
 | `CARD_CONSISTENCY_BOOST` | `25.0` | weight of constraint-card consistency — the dominant ranking signal |
 | `CARD_POSITION_DECAY` | `(1.0, 0.95, 0.90, 0.85)` | shallow decay so a candidate whose *leading* constraints explain the answers wins ties against one matching only in a trailing slot |
-| `CATEGORY_CONTEXT_BOOST` | `7.5` | weight of the durable shopper-stated category |
+| `CATEGORY_CONTEXT_BOOST` | `25.0` | weight of the durable shopper-stated category (raised from `7.5` in v2.14.0 once leaf-weighted matching made the signal sharp) |
+| `CATEGORY_ROUTE_CAP` | `600` | candidates pulled by the conjunctive category-recall route |
 | `OPEN_ASK_DRY_LIMIT` | `2` | consecutive open-ended questions returning nothing new before reverting to targeted attribute asks |
 | `*_SLATE_SCHEDULE` | `{1..5: 1}` | one hero result per turn through turn 5 on every route, then full `top_k` |
 | `MEMORY_POOL_CAP` | `900` | maximum grounded candidates retained across turns |

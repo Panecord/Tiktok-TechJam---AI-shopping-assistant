@@ -1,10 +1,10 @@
 {
   "sample_count": 200,
-  "hit_rate_at_10": 0.995,
-  "mrr": 0.976806,
-  "mttc": 2.81,
-  "efficiency": 0.819,
-  "recommended_technical_score": 0.954342,
+  "hit_rate_at_10": 1.0,
+  "mrr": 0.984306,
+  "mttc": 2.74,
+  "efficiency": 0.826,
+  "recommended_technical_score": 0.960492,
   "reported_token_usage": {
     "prompt_tokens": 0,
     "completion_tokens": 0,
@@ -20,14 +20,14 @@
     "browsing": {
       "sample_count": 80,
       "hit_rate_at_10": 1.0,
-      "mrr": 0.982639,
+      "mrr": 0.988889,
       "mttc": 2.625
     },
     "buying": {
       "sample_count": 80,
-      "hit_rate_at_10": 0.9875,
-      "mrr": 0.96875,
-      "mttc": 2.425
+      "hit_rate_at_10": 1.0,
+      "mrr": 0.98125,
+      "mttc": 2.25
     },
     "intent_override": {
       "sample_count": 30,
@@ -192,10 +192,10 @@
     {
       "sample_id": "public_0020",
       "scenario_type": "buying",
-      "hit": false,
-      "first_hit_turn": null,
-      "best_rank": null,
-      "reciprocal_rank": 0.0
+      "hit": true,
+      "first_hit_turn": 1,
+      "best_rank": 1,
+      "reciprocal_rank": 1.0
     },
     {
       "sample_id": "public_0021",
@@ -249,7 +249,7 @@
       "sample_id": "public_0027",
       "scenario_type": "buying",
       "hit": true,
-      "first_hit_turn": 3,
+      "first_hit_turn": 2,
       "best_rank": 1,
       "reciprocal_rank": 1.0
     },
@@ -642,8 +642,8 @@
       "scenario_type": "browsing",
       "hit": true,
       "first_hit_turn": 7,
-      "best_rank": 2,
-      "reciprocal_rank": 0.5
+      "best_rank": 1,
+      "reciprocal_rank": 1.0
     },
     {
       "sample_id": "public_0077",
@@ -793,7 +793,7 @@
       "sample_id": "public_0095",
       "scenario_type": "buying",
       "hit": true,
-      "first_hit_turn": 4,
+      "first_hit_turn": 2,
       "best_rank": 1,
       "reciprocal_rank": 1.0
     },
@@ -1633,7 +1633,7 @@
       "sample_id": "public_0200",
       "scenario_type": "buying",
       "hit": true,
-      "first_hit_turn": 2,
+      "first_hit_turn": 1,
       "best_rank": 1,
       "reciprocal_rank": 1.0
     }

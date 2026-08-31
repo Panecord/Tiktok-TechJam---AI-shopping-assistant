@@ -1,5 +1,7 @@
 """Focused regressions for the official Track 4 routing and context pillars."""
 
+import sqlite3
+
 from starter.agent import (
     Agent,
     ROUTE_RRF_WEIGHTS,
@@ -152,3 +154,33 @@ def test_explicit_slate_rejection_immediately_restores_top_k_recall() -> None:
         "slate_rejected": True,
     }
     assert Agent._precision_slate_limit(rejected, 2, 10) == 10
+
+
+def test_category_leaf_outranks_a_shared_ancestor() -> None:
+    """The stated category must discriminate on the path LEAF, not any ancestor.
+
+    Amazon paths run general -> specific and a shopper names the specific end. Crediting
+    a match anywhere in the path gave the same score to most of the catalog, which is why
+    the signal was flat exactly where turn-1 ties needed breaking.
+    """
+    agent = Agent.__new__(Agent)
+    agent.products = {
+        "leaf": {"title": "Tee", "categories": ["Clothing, Shoes & Jewelry", "Novelty", "Women"]},
+        "ancestor": {"title": "Boot", "categories": ["Clothing, Shoes & Jewelry", "Novelty", "Men"]},
+    }
+    requirements = {"category_context": "novelty women"}
+    assert agent._category_context_score("leaf", requirements) == 1.0
+    assert agent._category_context_score("ancestor", requirements) < 0.7
+
+
+def test_category_route_survives_an_unparseable_category_phrase() -> None:
+    """The route is purely additive, so a rejected FTS expression must not fail the turn."""
+    agent = Agent.__new__(Agent)
+
+    class _Boom:
+        def execute(self, *_args):
+            raise sqlite3.OperationalError("fts5: syntax error")
+
+    agent.connection = _Boom()
+    assert agent._category_route_candidates({"category": "and or"}) == []
+    assert agent._category_route_candidates({}) == []

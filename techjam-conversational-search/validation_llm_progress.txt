@@ -1,1 +1,1 @@
-6/6 slices done | elapsed=186s
+6/6 slices done | elapsed=152s
