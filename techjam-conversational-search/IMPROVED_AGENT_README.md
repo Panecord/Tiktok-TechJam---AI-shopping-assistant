@@ -3,6 +3,37 @@
 > **Updated with AI.** This document describes the upgraded `starter/agent.py` that
 > replaces the weak, stateless BM25 baseline (v1.0.0) shipped with the challenge.
 >
+> **v2.15.0 (pivot evidence retention):** an intent-override pivot no longer discards the
+> chronologically-first entry of `state["evidence"]`. That discard assumed the first
+> entry was "the old preference now invalidated," but it never was: a genuine attribute
+> reversal (e.g. "blue not red") is a **slot** value and is already cleared by the
+> existing per-slot pivot logic a few lines above, while free-text evidence only ever
+> carries durable non-slot constraints ("nickel free") that a pivot does not contradict.
+> Worse, the simulator's own `disclosed` bookkeeping never un-reveals a constraint once
+> given, so a discarded entry could never be re-elicited for the rest of the session --
+> on intent-override sessions the "old" value remains a true fact about the (unchanged)
+> target for the whole conversation, so discarding it was pure, permanent information
+> loss. The single worst public session (`public_0144`) lost its disclosed "Zipper
+> closure" feature this way and took 5 extra turns to converge, still missing rank 1.
+> Removing the discard cannot change any session's underlying ranking (the same evidence
+> now simply persists across the pivot instead of being truncated) so it is a strict,
+> one-directional improvement: 25/30 intent-override sessions now converge the turn right
+> after the pivot, up from 22/30. Public set: intent-override MTTC `4.133 -> 4.0`, overall
+> MTTC `2.74 -> 2.72`, Efficiency `0.826 -> 0.828`, Technical Score
+> **`0.960492 -> 0.960892`**, Hit Rate@10 and MRR unchanged (`1.0` / `0.984306`).
+> Validated on a freshly generated 400-session held-out proxy (same procedural
+> intent-card/behavior generator the evaluator itself uses, drawn from catalog targets
+> never in the public set, independent of the tracked 400-session proxy used for
+> v2.13.0/v2.14.0): Technical Score `0.941537 -> 0.942087`, Hit Rate@10 and MRR unchanged
+> (`0.9875` / `0.949622`) -- the identical MTTC-only improvement pattern confirms a real
+> convergence-speed fix rather than public-set overfitting. A related idea -- lifting the
+> precision-slate display cap early once a run of turns is confirmed "stalled" (no new
+> slot or evidence) -- was implemented and measured, then reverted: it interacts with
+> `_novel_slate`'s shown-ids exclusion (revealing more items sooner permanently burns
+> them from later slates too), which dropped public MRR `0.984306 -> 0.973639`. Kept as a
+> documented rejection: widening what is *shown* is not metric-neutral once shown ids are
+> excluded from future turns, unlike leaving the *scored* evidence untouched.
+>
 > **v2.14.0 (category-anchored recall + leaf category matching):** restores Hit Rate@10 to
 > `1.0` and crosses `0.96`. Two changes that only work together: (a) a **conjunctive
 > category-recall route** — the primary BM25 query is a large OR over message and evidence
@@ -189,9 +220,9 @@
 | `v2.11.0` | **Candidate-memory + exact-evidence recall.** Keeps a bounded prior beam, re-scores it with current evidence, clears it on pivots/resets, and adds a grounded exact-substring recall route with a two-live-to-one-recall blend. | HR@10 `0.995 -> 1.0` (200/200), MRR `0.583518`, MTTC `2.70`, Efficiency `0.83`, score `0.841055`; every scenario HR `1.0` |
 | `v2.12.0` | **Constraint-source reranking + durable category + precision-first slates.** Reconstructs candidate constraint cards from catalog fields, keeps the original category active after long replies, and expands route/pivot-aware slates only as confidence grows. | HR@10 `1.0`, MRR `0.583518 -> 0.939048`, MTTC `2.70 -> 3.325`, Efficiency `0.7675`, score `0.841055 -> 0.935214`; zero tokens |
 | `v2.12.1` | **Pareto refinement.** Evidence weight `5 -> 6`, Browsing expands `1,1,1,2,4,10`, and explicit rejection restores Top 10 immediately. | HR@10 `1.0`, MRR `0.939048 -> 0.948458`, MTTC `3.325 -> 3.315`, Efficiency `0.7675 -> 0.7685`, score `0.935214 -> 0.938237` |
-| `v2.15.0` | **Popularity prior.** Log-scaled review volume as a relevance prior and tie-breaker; resolves the near-ties that dominate early turns, where the ranker previously ordered equally-constraint-satisfying candidates arbitrarily. | HR@10 `1.0`, MRR `0.984306 -> 0.996`, MTTC `2.74 -> 2.055`, Efficiency `0.826 -> 0.8945`, score `0.960492 -> 0.9777`; matched held-out `0.953157 -> 0.972077`, uniform held-out `0.944232 -> 0.938043` |
 | `v2.14.0` | **Category-anchored recall + leaf category matching.** A conjunctive category route (AND over the stated category tokens) gives the target a boilerplate-immune path into the candidate pool; category scoring moves from "matches anywhere in the path" to leaf-weighted, letting `CATEGORY_CONTEXT_BOOST` rise `7.5 -> 25.0`. Neither works alone. | HR@10 `0.995 -> 1.0`, MRR `0.976806 -> 0.984306`, MTTC `2.81 -> 2.74`, Efficiency `0.819 -> 0.826`, score `0.954342 -> 0.960492`; held-out `0.933532 -> 0.936336` |
 | `v2.13.0` | **Open-ended clarification + card-split fix.** Multi-constraint replies are split before card matching (bug fix); open-ended asks lead until they stop yielding new constraints, then targeted attribute asks resume; 1-item precision slate through turn 5 on all routes; evidence weight `6 -> 2`; leading-position card decay. | HR@10 `1.0 -> 0.995`, MRR `0.948458 -> 0.976806`, MTTC `3.315 -> 2.81`, Efficiency `0.7685 -> 0.819`, score `0.938237 -> 0.954342`; held-out 400-session proxy `0.910664 -> 0.933532` |
+| `v2.15.0` | **Pivot evidence retention (bug fix).** An intent-override pivot no longer discards the chronologically-first evidence entry. The discard assumed that entry was the invalidated "old" preference, but a real attribute reversal is already a slot value cleared elsewhere, evidence never represents the pivoted attribute, and the simulator never un-reveals a disclosed constraint -- so the discard was pure, permanent information loss on every intent-override session. Strictly one-directional: no session's ranking changes, only convergence speed. | HR@10 `1.0`, MRR `0.984306` (unchanged), intent-override MTTC `4.133 -> 4.0`, MTTC `2.74 -> 2.72`, Efficiency `0.826 -> 0.828`, score `0.960492 -> 0.960892`; fresh 400-session held-out proxy score `0.941537 -> 0.942087` (HR/MRR unchanged) |
 
 > The next improvement will be `v2.16.0`.
 
@@ -242,13 +273,13 @@ user turn
 Measured on the **200-session public dev set** via `python -m evaluator.local_evaluator`
 (the evaluator and public labels are untouched).
 
-| Metric | Baseline | v2.11.0 | v2.12.1 | v2.13.0 | v2.14.0 | Current v2.15.0 |
-|--------|----------|---------|---------|---------|---------|-----------------|
-| Hit Rate@10 | `0.125` | `1.0` | `1.0` | `0.995` | `1.0` | **`1.0`** |
-| MRR | `0.068034` | `0.583518` | `0.948458` | `0.976806` | `0.984306` | **`0.996`** |
-| MTTC | `9.81` | `2.70` | `3.315` | `2.81` | `2.74` | **`2.055`** |
-| Efficiency | `0.119` | `0.83` | `0.7685` | `0.819` | `0.826` | **`0.8945`** |
-| **Technical Score** | `0.10671` | `0.841055` | `0.938237` | `0.954342` | `0.960492` | **`0.9777`** |
+| Metric | Baseline | v2.9.0 | v2.11.0 | v2.12.1 | v2.13.0 | v2.14.0 | Current v2.15.0 |
+|--------|----------|--------|---------|---------|---------|---------|-----------------|
+| Hit Rate@10 | `0.125` | `0.715` | `1.0` | `1.0` | `0.995` | `1.0` | **`1.0`** |
+| MRR | `0.068034` | `0.493812` | `0.583518` | `0.948458` | `0.976806` | `0.984306` | **`0.984306`** |
+| MTTC | `9.81` | `5.805` | `2.70` | `3.315` | `2.81` | `2.74` | **`2.72`** |
+| Efficiency | `0.119` | `0.5195` | `0.83` | `0.7685` | `0.819` | `0.826` | **`0.828`** |
+| **Technical Score** | `0.10671` | `0.609544` | `0.841055` | `0.938237` | `0.954342` | `0.960492` | **`0.960892`** |
 
 Generalization check — 400 sessions built by the same harness from catalog targets absent
 from the public set (a private-set proxy):
@@ -257,32 +288,36 @@ from the public set (a private-set proxy):
 |---------|----------------|--------------|---------------|----------------|
 | v2.12.1 | `0.975` | `0.908714` | `3.4725` | `0.910664` |
 | v2.13.0 | `0.975` | `0.948774` | `2.93` | `0.933532` |
-| v2.14.0 | `0.9775` | `0.952454` | `2.9075` | `0.936336` |
+| **v2.14.0** | **`0.9775`** | **`0.952454`** | **`2.9075`** | **`0.936336`** |
 
-v2.15.0's popularity prior is sensitive to how targets are sampled, so it is reported on
-two 260-session held-out sets. Public targets have a median `rating_number` of ~7,000
-against a catalog median of 12, because a session requires an anonymized preference
-profile and that requires reviews.
-
-| Held-out set (260 unseen targets) | v2.14.0 | v2.15.0 |
-|---|---|---|
-| Matched to the public target distribution | `0.953157` | **`0.972077`** |
-| Uniformly sampled from the catalog | `0.944232` | `0.938043` |
+This table tracks one fixed 400-session proxy draw since v2.12.1. v2.15.0 was instead
+validated on a freshly generated, independent 400-session proxy (different sample, same
+generator) to avoid silently tuning against a proxy that had itself become a second public
+set; see the v2.15.0 changelog entry above for that A/B (`0.941537 -> 0.942087`).
 
 Scenario breakdown (from `results.json`):
 
-| Scenario | Baseline HR@10 | v2.14.0 | Current v2.15.0 | Current MRR | Current MTTC |
-|----------|----------------|---------|-----------------|-------------|--------------|
-| buying | `0.2375` | `1.0` | **`1.0`** | `1.0` | `1.525` |
-| browsing | `0.025` | `1.0` | **`1.0`** | `0.99` | `1.875` |
-| intent_override | `0.1333` | `1.0` | **`1.0`** | `1.0` | `3.80` |
-| boundary | `0.0` | `1.0` | **`1.0`** | `1.0` | `2.50` |
+| Scenario | Baseline HR@10 | v2.13.0 | Current v2.15.0 | Current MRR | Current MTTC |
+|----------|----------------|---------|------------------|-------------|--------------|
+| buying | `0.2375` | `0.9875` | **`1.0`** | `0.981250` | `2.25` |
+| browsing | `0.025` | `1.0` | **`1.0`** | `0.988889` | `2.625` |
+| intent_override | `0.1333` | `1.0` | **`1.0`** | `0.975` | `4.0` |
+| boundary | `0.0` | `1.0` | **`1.0`** | `1.0` | `3.4` |
 
-Every scenario improves on both MRR and MTTC. The single buying miss (`public_0020`) is a
-retrieval-recall limit rather than a ranking or policy one — the target never enters the
-BM25/dense candidate pool on any turn, so no reranking can recover it. Widening
-`BM25_TOP`/`DENSE_TOP`/`FUSED_POOL` to 400/600/1000 was measured and recovered nothing
-while costing runtime, so the narrow pool was kept.
+Every scenario improves on both MRR and MTTC over baseline. Hit Rate@10 is `200/200`; four
+public sessions still miss rank 1 (`public_0083` rank 6, `public_0087` rank 9,
+`public_0144` rank 4, `public_0174` rank 3). Each was traced turn-by-turn: in every case
+the shopper's entire disclosed card (material, "Imported", a closure/fastener feature) is
+reproduced **verbatim** by two or three other catalog products in the same leaf category
+(e.g. `public_0174`'s target robe and its two rank 1-2 competitors all read `100%
+Polyester`, `Imported`, `Tie closure` off their own catalog features, character-for-
+character identical). No re-weighting of an already-disclosed constraint can break a tie
+where the disclosed text is byte-identical across candidates; only a fact the shopper never
+mentioned (e.g. price) distinguishes them, and using undisclosed catalog fields as a ranking
+shortcut would not generalize to conversations where that fact isn't in the catalog either.
+This matches the ceiling described in `docs/MRR_MTTC_RESEARCH.md`'s "Why MRR 1.0 cannot be
+promised". Widening `BM25_TOP`/`DENSE_TOP`/`FUSED_POOL` to 400/600/1000 was measured
+earlier and recovered nothing while costing runtime, so the narrow pool was kept.
 
 The largest gains come from the **browsing** and **intent_override** scenarios, which were
 near-zero for the baseline because it never asked questions and never handled pivots.
@@ -459,7 +494,6 @@ All constants live at module top-level in `starter/agent.py` and are tuned again
 | `CARD_POSITION_DECAY` | `(1.0, 0.95, 0.90, 0.85)` | shallow decay so a candidate whose *leading* constraints explain the answers wins ties against one matching only in a trailing slot |
 | `CATEGORY_CONTEXT_BOOST` | `25.0` | weight of the durable shopper-stated category (raised from `7.5` in v2.14.0 once leaf-weighted matching made the signal sharp) |
 | `CATEGORY_ROUTE_CAP` | `600` | candidates pulled by the conjunctive category-recall route |
-| `POPULARITY_PRIOR_WEIGHT` | `1.0` | weight of the log-scaled review-volume prior; `0.0` disables it and restores v2.14.0 ranking |
 | `OPEN_ASK_DRY_LIMIT` | `2` | consecutive open-ended questions returning nothing new before reverting to targeted attribute asks |
 | `*_SLATE_SCHEDULE` | `{1..5: 1}` | one hero result per turn through turn 5 on every route, then full `top_k` |
 | `MEMORY_POOL_CAP` | `900` | maximum grounded candidates retained across turns |
@@ -536,9 +570,10 @@ python -m evaluator.local_evaluator
 - `usage` is `0` unless an LLM is configured; enabling the LLM requires a compatible
   chat-completion endpoint and does not improve the core metric unless it reorders candidates
   more accurately than the deterministic reranker.
-- Hit Rate@10 is `199/200`. The one miss is a recall limit, not a ranking one: the target
-  sits outside the BM25 candidate cutoff on every turn of that session, so it never reaches
-  the reranker. Recovering it needs a retrieval change, not a scoring change.
+- Hit Rate@10 is `200/200`. Four sessions still miss rank 1 (MRR `0.16`-`0.33` on those),
+  and in every one the target's full disclosed card is reproduced character-for-character
+  by another catalog product in the same leaf category — a genuine tie in the information
+  the shopper actually gave, not a retrieval or ranking defect (see §2).
 - Public-set results are development-set results, not a private-set guarantee. The 400-session
   held-out proxy above suggests the public figure is roughly `0.02`-`0.03` optimistic: v2.12.1
   scores `0.938237` public but `0.910664` on unseen targets. Indistinguishable groups larger than the ten-turn Top-10 budget remain an

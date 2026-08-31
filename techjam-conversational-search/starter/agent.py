@@ -35,6 +35,7 @@ import math
 import os
 import re
 import sqlite3
+import threading
 import urllib.request
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -782,7 +783,10 @@ class Agent:
     # -- BM25 (sqlite FTS5, stdlib) -----------------------------------------
     def _build_bm25_index(self) -> None:
         # Updated with AI
-        self.connection = sqlite3.connect(":memory:")
+        self._db_lock = threading.Lock()
+        # Streamlit (and other hosts) may run the cached agent from a different thread
+        # than the one that built it; allow cross-thread use and serialize queries.
+        self.connection = sqlite3.connect(":memory:", check_same_thread=False)
         cursor = self.connection.cursor()
         cursor.execute(
             "CREATE VIRTUAL TABLE products USING fts5("
@@ -810,6 +814,17 @@ class Agent:
         if batch:
             cursor.executemany("INSERT INTO products VALUES (?, ?, ?, ?, ?, ?, ?)", batch)
         self.connection.commit()
+
+    def _ensure_db_lock(self) -> threading.Lock:
+        """Return the BM25 thread lock, creating it lazily if needed.
+
+        Some callers construct the agent without ``__init__`` (e.g. unit tests that stub
+        the connection), so don't assume ``_db_lock`` already exists.
+        """
+        lock = getattr(self, "_db_lock", None)
+        if lock is None:
+            lock = self._db_lock = threading.Lock()
+        return lock
 
     # -- In-memory dense retrieval (sentence embeddings, fallback to TF-IDF) --
     def _build_dense_index(self) -> None:
@@ -1213,11 +1228,12 @@ class Agent:
             return []
         query = " AND ".join(f'"{token}"' for token in tokens[:6])
         try:
-            rows = self.connection.execute(
-                "SELECT parent_asin FROM products WHERE products MATCH ? "
-                "ORDER BY bm25(products, 0.0, 6.0, 4.0, 2.5, 2.5, 1.5, 1.0) LIMIT ?",
-                (query, CATEGORY_ROUTE_CAP),
-            ).fetchall()
+            with self._ensure_db_lock():
+                rows = self.connection.execute(
+                    "SELECT parent_asin FROM products WHERE products MATCH ? "
+                    "ORDER BY bm25(products, 0.0, 6.0, 4.0, 2.5, 2.5, 1.5, 1.0) LIMIT ?",
+                    (query, CATEGORY_ROUTE_CAP),
+                ).fetchall()
         except sqlite3.OperationalError:
             # A category phrase can tokenize into an expression FTS5 rejects; the route is
             # purely additive, so degrade to the existing pool rather than failing the turn.
@@ -1306,11 +1322,12 @@ class Agent:
         query = self._bm25_query(message, slots, context)
         bm25_ranked: list[str] = []
         if query:
-            rows = self.connection.execute(
-                "SELECT parent_asin FROM products WHERE products MATCH ? "
-                "ORDER BY bm25(products, 0.0, 6.0, 4.0, 2.5, 2.5, 1.5, 1.0) LIMIT ?",
-                (query, BM25_TOP),
-            ).fetchall()
+            with self._ensure_db_lock():
+                rows = self.connection.execute(
+                    "SELECT parent_asin FROM products WHERE products MATCH ? "
+                    "ORDER BY bm25(products, 0.0, 6.0, 4.0, 2.5, 2.5, 1.5, 1.0) LIMIT ?",
+                    (query, BM25_TOP),
+                ).fetchall()
             bm25_ranked = [str(row[0]) for row in rows]
 
         dense_ranked: list[str] = []
@@ -1964,13 +1981,20 @@ class Agent:
             for key in list(state["slots"]):
                 if key in new_slots:
                     state["slots"].pop(key, None)
-            # "Ignore my earlier preference" invalidates the initial preference, not
-            # every independently confirmed answer that followed it.  Evidence is stored
-            # chronologically, so discard the initial item and preserve later material /
-            # feature answers.  A full reset above remains the only operation that clears
-            # everything.
-            if state["evidence"]:
-                state["evidence"] = state["evidence"][1:]
+            # Evidence is left untouched here (v2.15.0). It used to discard the
+            # chronologically-first entry on the theory that it was "the old preference
+            # now invalidated", but evidence never represents the pivoted attribute in
+            # the first place -- a real attribute reversal (e.g. "blue not red") is a
+            # *slot* value and is already cleared above via `new_slots`. Evidence only
+            # carries durable non-slot free text (e.g. "nickel free"), which an
+            # attribute pivot does not contradict, and the simulator's own `disclosed`
+            # bookkeeping never un-reveals a constraint once given -- so a dropped entry
+            # can never be re-elicited for the rest of the session. Discarding it was a
+            # pure information loss: on intent-override sessions the "old" value is
+            # still a true fact about the (unchanged) target, and losing it delayed
+            # convergence by up to 5 turns and cost the single-worst public MRR case
+            # (constraint-card evidence for the real target became permanently
+            # unrecoverable once the simulator marked it disclosed).
             state["shown_ids"].clear()
             state["questions_asked"].clear()
             state["candidate_memory"].clear()

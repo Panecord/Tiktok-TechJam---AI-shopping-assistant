@@ -56,6 +56,7 @@ improvement without an upload, and can trigger the evaluator run from the sideba
 
 ```bash
 cd techjam-conversational-search
+.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt   # includes streamlit, pandas, plotly
 streamlit run demo-assets/app.py
 ```

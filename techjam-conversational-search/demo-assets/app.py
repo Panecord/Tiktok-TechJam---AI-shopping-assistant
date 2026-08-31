@@ -18,6 +18,7 @@ import re
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 
 import pandas as pd
@@ -757,6 +758,172 @@ def run_evaluator(repo_root: Path, log_placeholder, mode: str) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
+# Realtime session demo
+# ---------------------------------------------------------------------------
+# The three scripted turns from the demo video. Reproducing them here makes it trivial
+# to demonstrate route switching (browsing -> buying), the single-attribute intent pivot,
+# and the grounded recommendation proof on camera.
+SCRIPTED_TURNS = [
+    ("Turn 1", "I'm looking for women's shoes, but I'm still exploring."),
+    ("Turn 2", "I'd like something in leather, color: black, for walking."),
+    ("Turn 3", "Actually, ignore the color I said. I want red instead."),
+]
+
+
+@st.cache_resource
+def _load_demo_agent(catalog_path: str):
+    """Load (once) the live agent used by the realtime demo."""
+    import sys
+
+    # The `starter` package lives at the repo root; when Streamlit runs `app.py` from
+    # `demo-assets/`, that root isn't on sys.path automatically.
+    root = str(REPO_ROOT)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from starter.agent import Agent
+
+    return Agent(Path(catalog_path))
+
+
+def _demo_run_turn(agent, sid: str, message: str, turn: int) -> dict:
+    """Drive one `respond()` call and capture everything the demo narrates."""
+    response = agent.respond(sid, message, turn, top_k=10)
+    route = getattr(agent, "_last_route", {}) or {}
+    state = agent._sessions.get(sid, {}) or {}
+    recs = response.get("recommendations", []) or []
+    grounded = []
+    for item in recs:
+        asin = str(item.get("parent_asin") or "")
+        product = agent.products.get(asin, {})
+        grounded.append(
+            {
+                "asin": asin,
+                "title": str(product.get("title") or "Untitled product"),
+                "in_catalog": asin in agent.products,
+            }
+        )
+    usage = response.get("usage", {}) or {}
+    return {
+        "message": response.get("message", ""),
+        "ask_attribute": response.get("ask_attribute"),
+        "route": route.get("intent"),
+        "bm25_weight": route.get("bm25_weight"),
+        "dense_weight": route.get("dense_weight"),
+        "profile_used": route.get("profile_context_used", False),
+        "intent": state.get("intent"),
+        "slots": dict(state.get("slots") or {}),
+        "evidence": list(state.get("evidence") or []),
+        "questions_asked": list(state.get("questions_asked") or []),
+        "recommendations": grounded,
+        "tokens": int(usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0)),
+    }
+
+
+def _reset_demo(profile_text: str) -> None:
+    st.session_state.pop("demo_sid", None)
+    st.session_state.pop("demo_chat", None)
+    st.session_state.pop("demo_turn", None)
+
+
+def _push_demo_turn(agent, message: str) -> None:
+    """Record a user turn and run it against the live agent."""
+    message = (message or "").strip()
+    if not message:
+        return
+    sid = st.session_state["demo_sid"]
+    turn = int(st.session_state.get("demo_turn", 1))
+    result = _demo_run_turn(agent, sid, message, turn)
+    st.session_state.setdefault("demo_chat", []).append({"user": message, "result": result})
+    st.session_state["demo_turn"] = turn + 1
+
+
+def render_realtime_demo() -> None:
+    """Realtime, streamable live-session page (route / slots / pivot / grounding)."""
+    st.subheader("🎬 Realtime Session Demo")
+    st.caption(
+        "Talk to the live agent and watch the **route tag**, **dialogue slot state**, "
+        "**ask/recommend policy**, and a **grounded catalog check**. The scripted turns "
+        "reproduce the demo video flow."
+    )
+
+    # Load (once per process) the live agent and lazily start a session.
+    agent = _load_demo_agent(str(REPO_ROOT / "data" / "catalog.jsonl"))
+    st.session_state["_demo_agent"] = agent
+
+    with st.sidebar:
+        st.header("🎛️ Demo controls")
+        profile_text = st.text_input(
+            "Profile tags (comma-separated)", value="comfort,fit,durability"
+        )
+        if st.button("🔄 New conversation", type="primary", width="stretch"):
+            _reset_demo(profile_text)
+            st.rerun()
+        st.markdown("**Scripted turns**")
+        for label, message in SCRIPTED_TURNS:
+            if st.button(f"▶ {label}", width="stretch"):
+                _push_demo_turn(agent=agent, message=message)
+
+    if "demo_sid" not in st.session_state:
+        tags = [t.strip() for t in profile_text.split(",") if t.strip()]
+        sid = f"demo_{uuid.uuid4().hex}"
+        agent.reset(sid, {"preference_tags": tags})
+        st.session_state["demo_sid"] = sid
+        st.session_state["demo_tags"] = tags
+        st.session_state["demo_chat"] = []
+        st.session_state["demo_turn"] = 1
+
+    # Input form + send.
+    with st.form("demo_form", clear_on_submit=True):
+        prompt = st.text_input(
+            "You:", key="demo_input", placeholder="Type a requirement…", label_visibility="collapsed"
+        )
+        submitted = st.form_submit_button("Send", type="primary")
+    if submitted:
+        _push_demo_turn(agent, prompt)
+        st.rerun()
+
+    chat = st.session_state.get("demo_chat", [])
+
+    # --- Immutable session header -----------------------------------------------
+    if chat:
+        last = chat[-1]["result"]
+        route = last.get("route") or last.get("intent") or "—"
+        st.markdown(
+            f"**route:** `{route}` · **ask_attribute:** `{last.get('ask_attribute')}` · "
+            f"**tokens:** `{last.get('tokens')}` · **turn:** `{len(chat)}`"
+        )
+
+    # --- Conversation transcript ------------------------------------------------
+    for i, entry in enumerate(chat, start=1):
+        result = entry["result"]
+        with st.chat_message("user"):
+            st.markdown(entry["user"])
+        with st.chat_message("assistant"):
+            st.markdown(result["message"])
+            if result["recommendations"]:
+                st.markdown("**Recommendations (grounded)**")
+                for rank, rec in enumerate(result["recommendations"], start=1):
+                    badge = "✅ grounded" if rec["in_catalog"] else "⚠️ NOT in catalog"
+                    st.markdown(
+                        f"{rank}. **`{rec['asin']}`** — {rec['title']} · {badge}"
+                    )
+            else:
+                st.markdown("_No recommendations this turn (asking a question)._")
+            with st.expander("🗂️ dialogue state", expanded=False):
+                st.markdown(
+                    f"**slots:** `{result['slots']}`\n\n"
+                    f"**route weights:** bm25 `{result['bm25_weight']}`, "
+                    f"dense `{result['dense_weight']}` · "
+                    f"profile context used: `{result['profile_used']}`\n\n"
+                    f"**evidence:** `{result['evidence']}`\n\n"
+                    f"**questions asked:** `{result['questions_asked']}`"
+                )
+
+    if not chat:
+        st.info("Send a message or click a **scripted turn** to start the live session.")
+
+
+# ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
 def main() -> None:
@@ -765,6 +932,14 @@ def main() -> None:
     else:
         st.markdown(_THEME_CSS, unsafe_allow_html=True)
         st.session_state["_anim_played"] = True
+
+    # Page navigation --------------------------------------------------------
+    page = st.sidebar.radio(
+        "Page", ["📊 Metrics Dashboard", "🎬 Realtime Demo"], index=0,
+    )
+    if page == "🎬 Realtime Demo":
+        render_realtime_demo()
+        return
 
     # Sidebar: controls -------------------------------------------------------
     with st.sidebar:
