@@ -20,7 +20,7 @@ techjam-conversational-search/
   data/catalog.jsonl               frozen 50k-product catalog (included, no download step)
   data/public_set.jsonl            200 labeled development sessions
   demo.py                          interactive terminal demo
-  app.py                           Streamlit metrics dashboard (judging-time live demo)
+  demo-assets/app.py               Streamlit metrics dashboard (judging-time live demo)
   requirements.txt                 deps for tests, embeddings, and the dashboard
   tests/                           regression suite (96 tests)
   docs/TRACK4_COMPLIANCE.md        requirement-by-requirement audit
@@ -45,15 +45,19 @@ pip install -r requirements.txt   # optional: only needed for tests, embeddings,
 
 ## Metrics dashboard
 
-For the live judging demo, a Streamlit dashboard (`techjam-conversational-search/app.py`)
-reads the same `results.json` the evaluator writes and renders the headline metrics,
-per-scenario breakdown, version progression, and a filterable session explorer. It can also
-trigger the evaluator run itself from the sidebar.
+For the live judging demo, a Streamlit dashboard (`techjam-conversational-search/demo-assets/app.py`)
+reads the same `results.json` the evaluator writes and is styled after
+[`demo-assets/results_dashboard.html`](techjam-conversational-search/demo-assets/results_dashboard.html):
+a dark "receipt"-themed hero with the headline metrics, a **Baseline → Final** before/after
+comparison (the weak BM25 starter v1.0.0 vs. the current run), per-scenario cards, an
+interactive Plotly breakdown, and a filterable session explorer. It also ships a built-in
+**baseline → current version-history table** so the progression chart always shows the
+improvement without an upload, and can trigger the evaluator run from the sidebar.
 
 ```bash
 cd techjam-conversational-search
 pip install -r requirements.txt   # includes streamlit, pandas, plotly
-streamlit run app.py
+streamlit run demo-assets/app.py
 ```
 
 In the sidebar you can:

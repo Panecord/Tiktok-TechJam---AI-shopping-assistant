@@ -34,8 +34,54 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-REPO_ROOT = Path(__file__).resolve().parent
+def _find_repo_root() -> Path:
+    """Locate the repo root (the directory containing ``data/`` and ``evaluator/``).
+
+    ``app.py`` now lives in ``<repo>/demo-assets/``, so we walk up from here. This keeps
+    every evaluator/data path dynamic and lets the dashboard run from anywhere.
+    """
+    here = Path(__file__).resolve().parent
+    for candidate in (here, here.parent, here.parent.parent):
+        if (candidate / "data").is_dir() and (candidate / "evaluator").is_dir():
+            return candidate
+    return here.parent
+
+
+REPO_ROOT = _find_repo_root()
 DEFAULT_RESULTS = REPO_ROOT / "results.json"
+
+# Built-in baseline -> current version history. Used when the user doesn't upload one, so a
+# live demo always shows the improvement from the weak BM25 starter (v1.0.0) to the current
+# agent without needing to paste a CSV/JSON first.
+DEFAULT_VERSION_HISTORY = [
+    {"version": "v1.0.0", "description": "Weak stateless BM25 starter (the provided baseline).",
+     "hit_rate_at_10": 0.125, "mrr": 0.068034, "mttc": 9.81, "efficiency": 0.119,
+     "technical_score": 0.10671, "total_tokens": 0},
+    {"version": "v2.0.0", "description": "Hybrid retrieval + dialogue state + grounded rerank + ask/recommend policy.",
+     "hit_rate_at_10": 0.225, "mrr": 0.068581, "mttc": 9.30, "efficiency": 0.17,
+     "technical_score": 0.167074, "total_tokens": 0},
+    {"version": "v2.6.0", "description": "Learned fusion weights + per-slot pivots + pool-recall diagnostics.",
+     "hit_rate_at_10": 0.545, "mrr": 0.422623, "mttc": 8.255, "efficiency": 0.2745,
+     "technical_score": 0.454187, "total_tokens": 0},
+    {"version": "v2.8.0", "description": "Ask-attribute reachability + LLM rerank context.",
+     "hit_rate_at_10": 0.650, "mrr": 0.4787, "mttc": 6.470, "efficiency": 0.453,
+     "technical_score": 0.5592, "total_tokens": 0},
+    {"version": "v2.9.0", "description": "Synonym-aware matching + re-fitted fusion weights.",
+     "hit_rate_at_10": 0.715, "mrr": 0.4938, "mttc": 5.805, "efficiency": 0.5195,
+     "technical_score": 0.6095, "total_tokens": 0},
+    {"version": "v2.10.0", "description": "Dual-route intent + free-text constraint evidence.",
+     "hit_rate_at_10": 0.995, "mrr": 0.58419, "mttc": 2.73, "efficiency": 0.827,
+     "technical_score": 0.8382, "total_tokens": 0},
+    {"version": "v2.11.0", "description": "Candidate-memory + exact-evidence recall.",
+     "hit_rate_at_10": 1.0, "mrr": 0.583518, "mttc": 2.70, "efficiency": 0.83,
+     "technical_score": 0.841055, "total_tokens": 0},
+    {"version": "v2.12.0", "description": "Rank-first precision slates.",
+     "hit_rate_at_10": 1.0, "mrr": 0.939048, "mttc": 3.325, "efficiency": 0.7675,
+     "technical_score": 0.935214, "total_tokens": 0},
+    {"version": "v2.12.1", "description": "Pareto refinement — current.",
+     "hit_rate_at_10": 1.0, "mrr": 0.948458, "mttc": 3.315, "efficiency": 0.7685,
+     "technical_score": 0.938237, "total_tokens": 0},
+]
 
 SCENARIO_ORDER = ["buying", "browsing", "intent_override", "boundary"]
 SCENARIO_LABEL = {
@@ -381,6 +427,132 @@ def version_chart(df: pd.DataFrame, selected: list[str]) -> go.Figure:
 
 
 # ---------------------------------------------------------------------------
+# Dark "receipt" theme (inspired by demo-assets/results_dashboard.html)
+# ---------------------------------------------------------------------------
+_THEME_CSS = """
+<style>
+  :root { --bg:#0B0E14; --panel:#12161F; --panel-2:#171C27; --ink:#F2EFE9;
+          --muted:#7B8494; --amber:#E8A33D; --amber-dim:#6b5228; --cyan:#5EC8D8;
+          --line:#262C3A; --good:#7FBF7F; }
+  .stApp { background: var(--bg); }
+  .sc-hero { background: var(--panel); border:1px solid var(--line); border-radius:4px;
+             padding:24px 28px; margin-top:8px; }
+  .sc-hero-title { font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:.14em;
+                   text-transform:uppercase; color:var(--muted); border-bottom:1px dashed var(--line);
+                   padding-bottom:12px; margin-bottom:16px; display:flex; justify-content:space-between; }
+  .sc-metrics { display:grid; grid-template-columns:repeat(5,1fr); gap:4px; }
+  .sc-metric { padding:4px 10px 4px 0; border-right:1px dashed var(--line); }
+  .sc-metric:last-child { border-right:none; }
+  .sc-metric-label { font-family:'IBM Plex Mono',monospace; font-size:10.5px; letter-spacing:.08em;
+                     text-transform:uppercase; color:var(--muted); margin-bottom:8px; }
+  .sc-metric-value { font-family:'IBM Plex Mono',monospace; font-size:26px; font-weight:600;
+                     color:var(--amber); font-variant-numeric:tabular-nums; }
+  .sc-metric-value.cyan { color:var(--cyan); }
+  .sc-compare { display:flex; flex-direction:column; gap:14px; margin-top:8px; }
+  .sc-compare-row { display:grid; grid-template-columns:120px 1fr 90px; align-items:center; gap:14px; }
+  .sc-compare-label { font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--muted); }
+  .sc-track { position:relative; height:20px; background:var(--panel-2); border-radius:3px;
+              overflow:hidden; border:1px solid var(--line); }
+  .sc-fill { position:absolute; left:0; top:0; bottom:0; border-radius:3px 0 0 3px; }
+  .sc-fill.base { background:linear-gradient(90deg,#4a3a24,var(--amber-dim)); }
+  .sc-fill.final { background:linear-gradient(90deg,var(--amber-dim),var(--amber)); }
+  .sc-fill.final.cyan { background:linear-gradient(90deg,#245a63,var(--cyan)); }
+  .sc-compare-val { font-family:'IBM Plex Mono',monospace; font-size:13px; text-align:right; color:var(--ink); }
+  .sc-scenarios { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-top:8px; }
+  .sc-scenario-card { background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:16px; }
+  .sc-scenario-name { font-size:14px; font-weight:600; margin-bottom:2px; }
+  .sc-scenario-n { font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:var(--muted); margin-bottom:12px; }
+  .sc-scenario-stat { display:flex; justify-content:space-between; font-family:'IBM Plex Mono',monospace;
+                      font-size:12px; padding:5px 0; border-top:1px dashed var(--line); }
+  .sc-scenario-stat span:first-child { color:var(--muted); }
+  .sc-scenario-stat span:last-child { color:var(--ink); }
+</style>
+"""
+
+
+def _hero_html(agg: dict) -> str:
+    """Receipt-style metric hero (5 columns), matching the HTML inspiration."""
+    values = [
+        ("Hit Rate@10", _fmt_pct(agg["hit_rate_at_10"]), ""),
+        ("MRR", _fmt_pct(agg["mrr"]), ""),
+        ("MTTC", _fmt_num(agg["mttc"], 3), "cyan"),
+        ("Efficiency", _fmt_pct(agg["efficiency"]), ""),
+        ("Technical Score", _fmt_num(agg["technical_score"], 3), ""),
+    ]
+    cells = "".join(
+        f'<div class="sc-metric"><div class="sc-metric-label">{label}</div>'
+        f'<div class="sc-metric-value {cls}">{val}</div></div>'
+        for label, val, cls in values
+    )
+    return (
+        '<div class="sc-hero">'
+        '<div class="sc-hero-title"><span>final results.json</span>'
+        '<span>public set · n=200</span></div>'
+        f'<div class="sc-metrics">{cells}</div>'
+        '</div>'
+    )
+
+
+def _bar_width(metric: str, value: float) -> float:
+    """Bar width for a metric. MTTC is lower-is-better, so scale by its 0..11 range."""
+    if metric == "mttc":
+        return max(0.0, min(100.0, value / 11.0 * 100.0))
+    return max(0.0, min(100.0, value * 100.0))
+
+
+def _baseline_final_html(agg: dict, base: dict) -> str:
+    """Baseline (v1.0.0) vs. current before/after bars, mirroring the HTML inspiration."""
+    def row(label, metric, fmt, lower_better=False):
+        b = base.get(metric)
+        c = agg.get(metric)
+        if b is None or c is None or pd.isna(b) or pd.isna(c):
+            return ""
+        cls = " final cyan" if lower_better else " final"
+        return (
+            f'<div class="sc-compare-row"><div class="sc-compare-label">{label}</div>'
+            f'<div><div class="sc-track"><div class="sc-fill base" style="width:{_bar_width(metric, b):.1f}%"></div></div></div>'
+            f'<div class="sc-compare-val">{fmt(b)}</div></div>'
+            f'<div class="sc-compare-row"><div class="sc-compare-label"></div>'
+            f'<div><div class="sc-track"><div class="sc-fill{cls}" style="width:{_bar_width(metric, c):.1f}%"></div></div></div>'
+            f'<div class="sc-compare-val">{fmt(c)}</div></div>'
+        )
+
+    parts = [
+        row("Hit Rate@10", "hit_rate_at_10", lambda v: f"{v:.3f}"),
+        row("MRR", "mrr", lambda v: f"{v:.3f}"),
+        row("MTTC", "mttc", lambda v: f"{v:.3f}", lower_better=True),
+        row("Efficiency", "efficiency", lambda v: f"{v:.3f}"),
+        row("Technical Score", "technical_score", lambda v: f"{v:.3f}"),
+    ]
+    return '<div class="sc-compare">' + "".join(parts) + "</div>"
+
+
+def _scenario_cards_html(scen_df: pd.DataFrame) -> str:
+    """Grid of per-scenario cards (HR@10 / MRR / MTTC)."""
+    cards = []
+    for _, r in scen_df.iterrows():
+        name = str(r.get("scenario_label") or r.get("scenario", "other"))
+        n = int(r.get("sample_count")) if not pd.isna(r.get("sample_count")) else 0
+
+        def _p(v):
+            return "—" if pd.isna(v) else f"{v * 100:.1f}%"
+
+        def _n(v):
+            return "—" if pd.isna(v) else f"{v:.2f}"
+
+        cards.append(
+            '<div class="sc-scenario-card">'
+            f'<div class="sc-scenario-name">{name}</div>'
+            f'<div class="sc-scenario-n">n={n}</div>'
+            f'<div class="sc-scenario-stat"><span>Hit Rate@10</span><span>{_p(r.get("hit_rate_at_10"))}</span></div>'
+            f'<div class="sc-scenario-stat"><span>MRR</span><span>{_p(r.get("mrr"))}</span></div>'
+            f'<div class="sc-scenario-stat"><span>MTTC</span><span>{_n(r.get("mttc"))}</span></div>'
+            '</div>'
+        )
+    return '<div class="sc-scenarios">' + "".join(cards) + "</div>"
+
+
+# ---------------------------------------------------------------------------
 # Run evaluator (subprocess with live log + progress)
 # ---------------------------------------------------------------------------
 RUN_MODES = {
@@ -475,6 +647,8 @@ def run_evaluator(repo_root: Path, log_placeholder, mode: str) -> dict | None:
 # App
 # ---------------------------------------------------------------------------
 def main() -> None:
+    st.markdown(_THEME_CSS, unsafe_allow_html=True)
+
     # Sidebar: controls -------------------------------------------------------
     with st.sidebar:
         st.header("🎛️ Controls")
@@ -553,6 +727,12 @@ def main() -> None:
     if "version_history" in st.session_state and version_df is None:
         version_df = st.session_state["version_history"]
 
+    # Fall back to the built-in baseline -> current history so a live demo always shows
+    # the progression even before the user uploads/pastes a version-history table.
+    if version_df is None:
+        version_df = pd.DataFrame(DEFAULT_VERSION_HISTORY)
+        st.session_state["version_history"] = version_df
+
     # --- Resolve the results to display ---------------------------------------
     results = results or st.session_state.get("results")
     if results is None and DEFAULT_RESULTS.exists():
@@ -568,44 +748,18 @@ def main() -> None:
     sess_df = results["sessions"]
     scen_df = results["scenario_metrics"]
 
-    # --- Headline metric row ---------------------------------------------------
-    prev = None
-    if version_df is not None and not version_df.empty:
-        prev = version_df.iloc[-1]  # most recent previous version
-
-    def _delta(metric_key: str) -> float | None:
-        if prev is None or metric_key not in prev.columns:
-            return None
-        pv = _metric(_first_value(prev.to_dict(), metric_key,
-                                  {"hit_rate_at_10": "HitRate@10"}.get(metric_key, metric_key)))
-        cur = agg[metric_key]
-        if pd.isna(pv) or pd.isna(cur):
-            return None
-        return float(cur - pv)
-
-    cols = st.columns(6)
-    cards = [
-        ("hit_rate_at_10", _fmt_pct(agg["hit_rate_at_10"]), "normal"),
-        ("mrr", _fmt_pct(agg["mrr"]), "normal"),
-        ("mttc", _fmt_num(agg["mttc"], 2), "inverse"),
-        ("efficiency", _fmt_pct(agg["efficiency"]), "normal"),
-        ("technical_score", _fmt_num(agg["technical_score"], 4), "normal"),
-        ("total_tokens", f"{int(agg['total_tokens']):,}", "normal"),
-    ]
-    for col, (key, value, color) in zip(cols, cards):
-        delta = _delta(key)
-        tk_delta = delta if not pd.isna(delta) else None
-        col.metric(
-            label=METRIC_LABELS.get(key, key),
-            value=value,
-            delta=_fmt_delta(tk_delta) if tk_delta is not None else None,
-            delta_color=color,
-            help=METRIC_HELP.get(key),
-        )
+    # --- Headline "receipt" hero + Baseline -> Final ---------------------------
+    baseline = DEFAULT_VERSION_HISTORY[0]
+    st.markdown(_hero_html(agg), unsafe_allow_html=True)
     st.caption(
         "Technical Score = 0.50 × HitRate@10 + 0.30 × MRR + 0.20 × Efficiency · "
         "Efficiency = clip((11 − MTTC) / 10, 0, 1) · Token usage is a feasibility metric, not part of the core score."
     )
+
+    st.markdown("### Baseline → Final", unsafe_allow_html=True)
+    st.caption("weak BM25 starter (**v1.0.0**) vs. the current run")
+    st.markdown(_baseline_final_html(agg, baseline), unsafe_allow_html=True)
+
     with st.expander("📖 Metric definitions"):
         for key in ("hit_rate_at_10", "mrr", "mttc", "efficiency", "technical_score", "total_tokens"):
             st.markdown(f"**{METRIC_LABELS.get(key, key)}** — {METRIC_HELP.get(key, '')}")
@@ -614,6 +768,7 @@ def main() -> None:
     # --- Scenario breakdown ----------------------------------------------------
     st.subheader("Scenario breakdown")
     if not scen_df.empty:
+        st.markdown(_scenario_cards_html(scen_df), unsafe_allow_html=True)
         scen_melt = scen_df.melt(
             id_vars=["scenario_label", "sample_count"],
             value_vars=["hit_rate_at_10", "mrr", "mttc"],
@@ -635,16 +790,6 @@ def main() -> None:
         fig.update_layout(legend_title_text="Metric", margin=dict(l=10, r=10, t=50, b=10))
         fig.for_each_trace(lambda t: t.update(hovertemplate="%{fullData.name}: %{y:.4f}<extra></extra>"))
         st.plotly_chart(fig, width="stretch")
-
-        show = scen_df.copy()
-        show["hit_rate_at_10"] = show["hit_rate_at_10"].map(lambda v: f"{v*100:.1f}%")
-        show["mrr"] = show["mrr"].map(lambda v: f"{v*100:.1f}%")
-        show["mttc"] = show["mttc"].map(lambda v: f"{v:.2f}")
-        show["n"] = show["sample_count"].map(lambda v: int(v) if not pd.isna(v) else v)
-        st.dataframe(
-            show[["scenario_label", "n", "hit_rate_at_10", "mrr", "mttc"]],
-            width="stretch", hide_index=True,
-        )
     else:
         st.info("No per-scenario metrics in the loaded results.")
 

@@ -53,17 +53,19 @@ results, not a guarantee for the private set.
 
 ## Metrics Dashboard
 
-A Streamlit dashboard (`app.py`) visualises `results.json` — headline metrics, per-scenario
-breakdown, version progression, and a filterable session explorer — and can re-run the
-evaluator from the sidebar (choose **Local (deterministic)** or **LLM (with model)**, with a
-live progress bar and ETA). Each metric card has a hover tooltip and a **Metric
-Definitions** expander. The controls sidebar is collapsible (starts collapsed; reopen with
-the top-left arrow) and each control group is icon-labelled (`⚙️ Run`, `📂 Load`, `📈
-Version history`, `🔍 Filters`). Run it from this directory:
+A Streamlit dashboard (`demo-assets/app.py`, styled after `demo-assets/results_dashboard.html`)
+visualises `results.json` — a dark receipt-style headline hero, a **Baseline → Final**
+comparison, per-scenario cards, an interactive scenario chart, a version-progression line
+chart (with a built-in baseline→current history), and a filterable session explorer — and
+can re-run the evaluator from the sidebar (choose **Local (deterministic)** or **LLM (with
+model)**, with a live progress bar and ETA). Each metric card has a hover tooltip and a
+**Metric Definitions** expander. The controls sidebar is collapsible (starts collapsed;
+reopen with the top-left arrow) and each control group is icon-labelled (`⚙️ Run`, `📂 Load`,
+`📈 Version history`, `🔍 Filters`). Run it from this directory:
 
 ```bash
 pip install -r requirements.txt   # includes streamlit, pandas, plotly
-streamlit run app.py
+streamlit run demo-assets/app.py
 ```
 
 ## Agent Interface
