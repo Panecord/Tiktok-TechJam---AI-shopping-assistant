@@ -42,14 +42,9 @@ from pathlib import Path
 from urllib.parse import urlparse
 from typing import Any
 
-# ===========================================================================
-# Updated with AI ΓÇö this file supersedes the v1.0.0 weak BM25 starter.
-# ===========================================================================
-
 # ---------------------------------------------------------------------------
 # Version marker ΓÇö makes it obvious this file supersedes the baseline.
 # ---------------------------------------------------------------------------
-# Updated with AI
 VERSION = "2.15.0"
 UPDATED_NOTE = (
     "UPDATED: this file supersedes the weak stateless BM25 starter (v1.0.0). "
@@ -70,7 +65,6 @@ STOPWORDS = {
 
 def _text(value: object) -> str:
     """Flatten a catalog field (str / list / dict) into a single string."""
-    # Updated with AI
     if value is None:
         return ""
     if isinstance(value, dict):
@@ -82,7 +76,6 @@ def _text(value: object) -> str:
 
 def _terms(text: str) -> list[str]:
     """Lowercased, stopword-filtered tokens of length > 1."""
-    # Updated with AI
     return [
         token.lower()
         for token in TOKEN_RE.findall(text)
@@ -92,7 +85,6 @@ def _terms(text: str) -> list[str]:
 
 def _searchable_text(product: dict) -> str:
     """Concatenate all searchable product fields (mirrors the evaluator)."""
-    # Updated with AI
     parts: list[str] = []
     for field in ("title", "categories", "features", "details", "store", "description"):
         parts.append(_text(product.get(field)))
@@ -153,8 +145,6 @@ def _parse_money(value: object) -> float | None:
 MATERIALS = (
     "cotton", "polyester", "nylon", "leather", "wool", "spandex",
     "silk", "rayon", "fabric", "denim", "linen", "fleece", "lace",
-    # Updated with AI: jewelry-specific materials (catalog is Clothing_Shoes_and_Jewelry,
-    # the original list was clothing-fabric-only and missed this whole category).
     "alloy", "gold", "silver", "sterling silver", "platinum", "titanium",
     "stainless steel", "gemstone", "crystal", "rhinestone", "pearl",
     "diamond", "cubic zirconia", "brass", "copper", "resin", "ceramic",
@@ -162,9 +152,6 @@ MATERIALS = (
     "canvas", "mesh", "velvet", "satin", "chiffon", "polyurethane",
 )
 
-# Updated with AI: the subset of MATERIALS the simulator's own classifier (a separate,
-# narrower 9-word list) recognizes as "material". Anything outside this set gets
-# classified as "feature" by the simulator instead -- see _attribute_values_for_product.
 EVALUATOR_RECOGNIZED_MATERIALS = frozenset({
     "cotton", "polyester", "nylon", "leather", "wool", "spandex", "silk", "rayon", "fabric",
 })
@@ -227,11 +214,6 @@ SIZE_RE = re.compile(r"\b(" + "|".join(SIZES) + r")\b", re.I)
 STYLE_RE = re.compile(r"\b(" + "|".join(STYLES) + r")\b", re.I)
 USE_CASE_RE = re.compile(r"\b(" + "|".join(USE_CASES) + r")\b", re.I)
 
-# Updated with AI: the simulator frequently discloses a constraint verbatim as a
-# "Label: value" fragment lifted directly from the product's own feature/detail
-# fields (e.g. "Material:alloy", "Color: Rose Gold"). Fixed vocabulary lists can
-# never keep up with the raw catalog text, so we also parse this format directly
-# and map common label spellings onto our internal slot names.
 LABELED_ATTR_RE = re.compile(
     r"\b(material|colou?r|size|style|category|department|use\s*case|occasion)\s*:\s*"
     r"([a-z0-9][a-z0-9 \-]{0,40}?)(?:[;,.]|$)",
@@ -311,7 +293,6 @@ _MATERIAL_SYNONYMS_REV = _reverse_synonyms(_MATERIAL_SYNONYMS)
 
 def _slot_value_in_text(value: str, text: str, attr: str) -> bool:
     """True if `value` or one of its static synonyms appears in `text`."""
-    # Updated with AI
     if value in text:
         return True
     if attr == "color":
@@ -461,7 +442,6 @@ DENSE_MODE_ENV = "COPILOT_DENSE"
 
 def _classify_constraint(value: str) -> str:
     """Map a natural-language constraint string to an attribute name."""
-    # Updated with AI
     lowered = value.lower()
     if "budget" in lowered or re.search(r"(?:\$|<=|under)\s*\d", lowered):
         return "budget"
@@ -544,7 +524,6 @@ def _detect_override(message: str) -> bool:
     "I don't have a preference for X" (common in the simulated customer replies)
     must NOT clear the dialogue state, or retrieval loses the target.
     """
-    # Updated with AI
     lowered = message.lower()
     pivot = (
         "actually", "ignore", "forget", "instead", "wait", "on second thought",
@@ -562,7 +541,6 @@ FULL_RESET_PHRASES = (
 
 def _is_full_reset(message: str) -> bool:
     """True only for strong reset phrases that clear ALL slot state."""
-    # Updated with AI
     lowered = message.lower()
     return any(phrase in lowered for phrase in FULL_RESET_PHRASES)
 
@@ -574,7 +552,6 @@ def _attr_value_from_text(text: str, attr: str) -> str | None:
     ("faux leather" -> polyurethane, not leather; "rose gold" -> pink, not gold) resolves
     to its true canonical value.
     """
-    # Updated with AI
     if attr == "material":
         m = _MATERIAL_SYNONYM_RE.search(text)
         if m:
@@ -604,13 +581,9 @@ def _extract_slots(message: str) -> dict[str, Any]:
 
     Returns a dict of {attribute: value}. Also captures a coarse category phrase.
     """
-    # Updated with AI
     text = message.lower()
     slots: dict[str, Any] = {}
 
-    # Updated with AI: parse explicit "Label: value" fragments first (these are
-    # ground-truth constraints handed to us verbatim by the customer/simulator,
-    # so they take priority over fuzzy vocabulary matching below).
     for label, raw_value in LABELED_ATTR_RE.findall(text):
         slot_name = LABEL_TO_SLOT.get(label.strip().lower())
         value = raw_value.strip()
@@ -636,7 +609,7 @@ def _extract_slots(message: str) -> dict[str, Any]:
 
     for attr in ("material", "color", "size", "style", "use_case"):
         if attr in slots:
-            continue  # Updated with AI: don't overwrite an exact labeled-value match above.
+            continue
         value = _attr_value_from_text(text, attr)
         if value and value not in ("size",):
             slots[attr] = value
@@ -709,7 +682,6 @@ def _extract_constraint_evidence(message: str) -> str | None:
 
 def _attribute_values_for_product(product: dict, text: str | None = None) -> dict[str, str]:
     """Return the attribute values present in a product's text (for pool analysis)."""
-    # Updated with AI
     if text is None:
         text = _searchable_text(product).lower()
     values: dict[str, str] = {}
@@ -717,15 +689,6 @@ def _attribute_values_for_product(product: dict, text: str | None = None) -> dic
         val = _attr_value_from_text(text, attr)
         if val:
             values[attr] = val
-            # Updated with AI: the simulator's own constraint classifier recognizes only
-            # a narrow 9-word material list (cotton/polyester/nylon/leather/wool/spandex/
-            # silk/rayon/fabric) as "material" -- everything else (denim, linen, fleece,
-            # lace, and every jewelry material: alloy, gold, silver, gemstone, ...) gets
-            # classified as "feature" instead and can ONLY ever be revealed by asking
-            # about "feature". Register it there too so _choose_ask_attribute can
-            # actually reach it (previously impossible: "feature" was never populated
-            # here at all, so its entropy was always undefined and it could never be
-            # selected -- confirmed 0/1138 asks were ever "feature").
             if attr == "material" and val not in EVALUATOR_RECOGNIZED_MATERIALS:
                 values["feature"] = val
     categories = product.get("categories") or []
@@ -748,7 +711,6 @@ class Agent:
     """
 
     def __init__(self, catalog_path: str | Path = "data/catalog.jsonl") -> None:
-        # Updated with AI
         self.catalog_path = Path(catalog_path)
         self.products: dict[str, dict] = {}
         self.order: list[str] = []
@@ -769,7 +731,6 @@ class Agent:
 
     # -- Catalog ------------------------------------------------------------
     def _build_catalog(self) -> None:
-        # Updated with AI
         self.products = {}
         self.order = []
         with self.catalog_path.open(encoding="utf-8") as handle:
@@ -782,7 +743,6 @@ class Agent:
 
     # -- BM25 (sqlite FTS5, stdlib) -----------------------------------------
     def _build_bm25_index(self) -> None:
-        # Updated with AI
         self._db_lock = threading.Lock()
         # Streamlit (and other hosts) may run the cached agent from a different thread
         # than the one that built it; allow cross-thread use and serialize queries.
@@ -834,7 +794,6 @@ class Agent:
         path is used. This avoids attempting a model download/load during the default run,
         and keeps the agent runnable when `sentence-transformers`/weights are not present.
         """
-        # Updated with AI
         self.dense_mode = "tfidf"
         if os.environ.get(DENSE_MODE_ENV, "") != "embed":
             self._build_tfidf_index()
@@ -858,7 +817,6 @@ class Agent:
 
     def _build_embed_index(self) -> None:
         """Embed every catalog product once and store the normalized matrix."""
-        # Updated with AI
         import numpy as np  # type: ignore[import-not-found]
         self._searchable_lc = {}
         texts: list[str] = []
@@ -873,7 +831,6 @@ class Agent:
 
     def _build_tfidf_index(self) -> None:
         """Build the in-memory sparse TF-IDF index (fallback path)."""
-        # Updated with AI
         self._searchable_lc = {}
         n_docs = len(self.order)
         doc_freqs: list[Counter] = []
@@ -926,14 +883,12 @@ class Agent:
         Returns (doc_index, score) pairs sorted by score descending. Uses sentence
         embeddings when available, otherwise the TF-IDF fallback.
         """
-        # Updated with AI
         if getattr(self, "dense_mode", "tfidf") == "embed":
             return self._embed_dense_scores(query)
         return self._tfidf_dense_scores(query)
 
     def _embed_dense_scores(self, query: str) -> list[tuple[int, float]]:
         """Embed the query and rank catalog docs by cosine similarity."""
-        # Updated with AI
         import numpy as np  # type: ignore[import-not-found]
         q = self._embed_model.encode([query], normalize_embeddings=True, show_progress_bar=False)[0]
         sims = self._emb_matrix @ q
@@ -950,7 +905,6 @@ class Agent:
         documents that actually share a term with the query (posting lists) rather
         than all ~50k docs each turn.
         """
-        # Updated with AI
         q_counts = Counter(_terms(query))
         q_vec: dict[int, float] = {}
         q_norm_sq = 0.0
@@ -997,7 +951,6 @@ class Agent:
         that already appears in the message (e.g. the category) is not emitted twice in the
         OR expression. Duplicate OR terms are no-ops for FTS5, so this only cleans the query.
         """
-        # Updated with AI
         seen: set[str] = set()
         terms: list[str] = []
         for token in _terms(" ".join(part for part in (message, context) if part)):
@@ -1023,7 +976,6 @@ class Agent:
         Tokens are de-duplicated so a slot value already present in the message (e.g.
         the category) is not double-weighted in the TF-IDF query vector.
         """
-        # Updated with AI
         parts = [message, context]
         for attr in ("material", "color", "size", "style", "use_case", "category"):
             value = slots.get(attr)
@@ -1040,7 +992,6 @@ class Agent:
     # -- Slot-aware re-scoring ------------------------------------------------
     def _slot_match_score(self, asin: str, slots: dict[str, Any]) -> float:
         """Score how well a product satisfies known slot constraints (0..1)."""
-        # Updated with AI
         if not slots:
             return 0.0
         product = self.products.get(asin, {})
@@ -1076,7 +1027,6 @@ class Agent:
 
     def _price_similarity(self, product: dict, slots: dict[str, Any]) -> float:
         """1.0 when the product price is at the budget, decaying to 0."""
-        # Updated with AI
         budget = _parse_money(slots.get("budget"))
         if budget is None:
             return 0.0
@@ -1278,7 +1228,6 @@ class Agent:
 
     def _feature_vector(self, asin: str, slots: dict[str, Any], bm25: float, dense: float) -> list[float]:
         """Feature vector used by the learned/fallback fusion: [bm25, dense, slot, price]."""
-        # Updated with AI
         product = self.products.get(asin, {})
         return [
             float(bm25),
@@ -1289,7 +1238,6 @@ class Agent:
 
     def _linear_fusion(self, feat: list[float]) -> float:
         """Score a candidate from its feature vector (learned or hand-tuned fallback)."""
-        # Updated with AI
         if USE_LEARNED_FUSION:
             w = FUSION_WEIGHTS
             return (
@@ -1318,7 +1266,6 @@ class Agent:
         and anonymized profile context a diversity bias. Both routes retain both channels
         and share the validated grounded final reranker.
         """
-        # Updated with AI
         query = self._bm25_query(message, slots, context)
         bm25_ranked: list[str] = []
         if query:
@@ -1367,10 +1314,6 @@ class Agent:
             matched_set = set(matched)
             unmatched = [asin for asin in pool if asin not in matched_set]
             pool = matched + unmatched
-            # Updated with AI: the ask/recommend confidence gate needs the count of
-            # candidates that actually satisfy the KNOWN constraints, not the size of
-            # the recall-safe backfilled pool (which stays near FUSED_POOL regardless
-            # of how many slots are known and therefore never triggers K_SMALL).
             self._last_matched_count = len(matched)
         else:
             self._last_matched_count = len(pool)
@@ -1388,9 +1331,6 @@ class Agent:
         bm25_pos = {asin: i for i, asin in enumerate(bm25_ranked)}
         features: dict[str, list[float]] = {}
         for asin in pool:
-            # Updated with AI: log-compress the rank (not the raw 1/(1+rank) reciprocal)
-            # so the feature still favors better BM25 matches but doesn't let a rank-30
-            # vs rank-1 difference swamp the slot/evidence signal once those saturate.
             b_norm = 1.0 / (1.0 + math.log1p(bm25_pos.get(asin, len(bm25_ranked))))
             d_norm = dense_score.get(asin, 0.0)
             features[asin] = self._feature_vector(asin, slots, b_norm, d_norm)
@@ -1416,7 +1356,6 @@ class Agent:
 
     def _combined_score(self, asin: str, slots: dict[str, Any]) -> float:
         """Score a candidate for rerank/margin (learned fusion, or the hand-tuned fallback)."""
-        # Updated with AI
         if USE_LEARNED_FUSION:
             feat = getattr(self, "_candidate_features", {}).get(asin)
             if feat is not None:
@@ -1440,7 +1379,6 @@ class Agent:
 
     def _top_scores(self, candidate_list: list[str], slots: dict[str, Any]) -> list[float]:
         """Recompute normalised scores for a candidate list (for margin policy)."""
-        # Updated with AI
         scores = [self._combined_score(asin, slots) for asin in candidate_list]
         return sorted(scores, reverse=True)
 
@@ -1458,7 +1396,6 @@ class Agent:
         shopper had no disclosed constraint.  Prefer attributes customers can answer,
         using entropy as a tie-breaker and profile tags as a small personalization hint.
         """
-        # Updated with AI
         if not candidate_list:
             return "other"
         # An open-ended question is not a fallback -- while the shopper is still
@@ -1481,19 +1418,8 @@ class Agent:
         for attr in ATTRIBUTE_PRIORITY:
             if attr in question_history:
                 continue
-            # Updated with AI: budget/price is near-continuous (almost every product has
-            # a distinct price), so its entropy is artificially high without being a
-            # genuinely informative question -- 168/168 budget asks in the public set
-            # got a non-informative "no preference" reply. Still captured automatically
-            # via BUDGET_RE if the customer mentions it unprompted; only excluded from
-            # being actively asked.
             if attr == "budget":
                 continue
-            # Updated with AI: "category" can never be answered informatively either --
-            # the simulator's own constraint classifier (evaluator.classify_constraint)
-            # only ever labels a disclosed constraint as budget/material/color/size/
-            # style/use_case/feature, never "category". Asking is a guaranteed dead end
-            # by construction (confirmed: 162/162 category asks got a non-answer).
             if attr == "category":
                 continue
             value_counts = per_attr_values.get(attr)
@@ -1692,7 +1618,6 @@ class Agent:
     # -- Grounded rerank (deterministic default; optional LLM hook) ---------------
     def _rerank_deterministic(self, candidate_list: list[str], slots: dict[str, Any]) -> list[str]:
         """Re-rank by fused relevance + a slot-aware boost (selects from candidates only)."""
-        # Updated with AI
         if not candidate_list:
             return []
         return sorted(
@@ -1703,7 +1628,6 @@ class Agent:
 
     def _llm_configured(self) -> bool:
         """True when an LLM reranker endpoint + key are present in the environment."""
-        # Updated with AI
         return bool(os.environ.get(LLM_URL_ENV) and os.environ.get(LLM_KEY_ENV))
 
     def _normalize_llm_url(self, url: str) -> str:
@@ -1712,7 +1636,6 @@ class Agent:
         Some providers give a bare base host (e.g. https://api.deepseek.com) which
         returns 404 on POST; the chat endpoint is <base>/chat/completions.
         """
-        # Updated with AI
         url = url.strip()
         if url.endswith("/chat/completions"):
             return url
@@ -1723,12 +1646,10 @@ class Agent:
 
     def _estimate_tokens(self, text: str) -> int:
         """Rough token estimate used only if the endpoint does not report usage."""
-        # Updated with AI
         return max(1, len(text) // 4)
 
     def _parse_ranked_ids(self, content: str, payload: dict) -> list[str] | None:
         """Extract a ranked ASIN list from an LLM response (field or JSON in content)."""
-        # Updated with AI
         ranked = payload.get("ranked_ids")
         if isinstance(ranked, list):
             return [str(x).strip() for x in ranked if str(x).strip()]
@@ -1754,7 +1675,6 @@ class Agent:
         recent_turns: list[str] | None = None,
     ) -> tuple[list[str] | None, dict[str, int]]:
         """One listwise (RankGPT-style) rerank call. Returns (ranked_ids, usage)."""
-        # Updated with AI
         lines: list[str] = []
         for i, asin in enumerate(candidate_list):
             product = self.products.get(asin, {})
@@ -1826,7 +1746,6 @@ class Agent:
         once, then returns (None, usage) so the caller falls back to the deterministic
         reranker. Returns (None, zero usage) when no LLM is configured.
         """
-        # Updated with AI
         url = os.environ.get(LLM_URL_ENV)
         key = os.environ.get(LLM_KEY_ENV)
         if not url or not key:
@@ -1867,7 +1786,6 @@ class Agent:
         credentials are configured, so a session does not pay an LLM call on every
         clarifying turn (cost/latency control).
         """
-        # Updated with AI
         deterministic = self._rerank_deterministic(candidate_list, slots)
         if not use_llm or not self._llm_configured():
             # No LLM requested/available -> deterministic path, zero tokens reported.
@@ -1889,7 +1807,6 @@ class Agent:
     # -- Public API -------------------------------------------------------------
     def reset(self, session_id: str, user_profile: dict) -> None:
         """Initialize per-session dialogue state (spec ┬º2)."""
-        # Updated with AI
         safe_profile = dict(user_profile or {})
         profile_terms = _profile_terms(safe_profile)
         self._sessions[session_id] = {
@@ -1921,7 +1838,6 @@ class Agent:
         turn: int,
         top_k: int,
     ) -> dict:
-        # Updated with AI
         if session_id not in self._sessions:
             raise RuntimeError("reset must be called before respond")
         state = self._sessions[session_id]
@@ -2080,18 +1996,10 @@ class Agent:
             }
 
         # --- Ask-vs-recommend policy (deterministic, computed before any LLM) ---
-        # Updated with AI: pool_size must reflect how narrow the CONSTRAINT-SATISFYING
-        # set is (so it shrinks as slots accumulate), not the raw recall-safe fused pool
-        # (which sits near FUSED_POOL=300 on virtually every turn and made K_SMALL=25
-        # unreachable). See self._last_matched_count set in _retrieve().
         pool_size = getattr(self, "_last_matched_count", len(candidates))
         scores = self._top_scores(candidates, slots)
         margin = 0.0
         if len(scores) >= 2:
-            # Updated with AI: the fusion bias term routinely makes scores[0] negative,
-            # which previously failed the `scores[0] > 0` guard and left margin stuck at
-            # its 0.0 default on every turn. Use abs() so the ratio stays meaningful
-            # regardless of the constant bias offset (bias doesn't affect relative order).
             denom = abs(scores[0]) if scores[0] != 0 else 1e-6
             margin = (scores[0] - scores[1]) / denom
 
@@ -2168,7 +2076,6 @@ class Agent:
 
     @staticmethod
     def _compose_question(ask_attribute: str) -> str:
-        # Updated with AI
         prompts = {
             "category": "What kind of product are you looking for?",
             "material": "Do you have a material preference?",

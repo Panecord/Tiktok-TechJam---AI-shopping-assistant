@@ -1,6 +1,6 @@
 # Improved Agent — Track 4 Shopping Copilot (v2.15.0)
 
-> **Updated with AI.** This document describes the upgraded `starter/agent.py` that
+> This document describes the upgraded `starter/agent.py` that
 > replaces the weak, stateless BM25 baseline (v1.0.0) shipped with the challenge.
 >
 > **v2.15.0 (pivot evidence retention):** an intent-override pivot no longer discards the

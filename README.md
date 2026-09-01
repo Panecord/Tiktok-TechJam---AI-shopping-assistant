@@ -100,7 +100,7 @@ version, and shows the Technical Score formula as a caption:
 *(This section was previously a separate file, `IMPROVED_AGENT_README.md` — merged here
 so the whole project is documented in one place.)*
 
-> **Updated with AI.** This document describes the upgraded `starter/agent.py` that
+> This document describes the upgraded `starter/agent.py` that
 > replaces the weak, stateless BM25 baseline (v1.0.0) shipped with the challenge.
 >
 > **v2.15.0 (popularity prior):** adds review volume as a log-scaled relevance prior and
