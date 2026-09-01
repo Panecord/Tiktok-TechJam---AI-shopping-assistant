@@ -40,8 +40,8 @@ pip install -r requirements.txt   # optional: only needed for tests, embeddings,
 ```
 
 ## Demo video
-
-[PASTE THE PUBLIC YOUTUBE URL — pending recording, see docs/demo_script.md]
+[Project Video](https://www.youtube.com/watch?v=b_iypZtrkxA
+)
 
 ## Metrics dashboard
 
